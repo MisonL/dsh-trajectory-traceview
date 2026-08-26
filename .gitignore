@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# secrets & environment
+.env
+.env.*
+*.pem
+*.key
+.credentials.yaml
+
+# build artifacts & intermediates
+dist/
+build/
+*.exe
+*.log
+
+# language caches
+.venv/
+__pycache__/
+*.pyc
+
+# local-only scripts (embed absolute machine paths; never publish)
+install.cjs
+test/render-repro.test.cjs
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
