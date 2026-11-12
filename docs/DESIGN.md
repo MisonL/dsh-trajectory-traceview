@@ -1,4 +1,4 @@
-# 设计方案：轨迹全历史检索 + 稳定锚点
+# 设计方案：轨迹稳定锚点 + 动作时间点 + 窗口内检索
 
 > 基线：`dsh-trajectory-traceview` v0.3.0（MIT，上游 AFAP）
 > 目标 dsh：`0.2.1-rc.5`
@@ -12,7 +12,7 @@
 
 | 编号 | 目标 | 判据 |
 |---|---|---|
-| G1 | **全历史检索**：搜索覆盖整个持久会话，不再只有已加载窗口 | 长会话中能搜到早期轮次的工具参数与结果，并能跳过去 |
+| G1 | ~~**全历史检索**：搜索覆盖整个持久会话~~ → **降级为「已加载窗口内检索」**（2026-11-12 实测：客户端分页与宿主 FTS5 两条路都不可行，见 D2 与 §12.13） | 能在当前已加载的轨迹里搜到工具参数与结果，并能跳过去；**UI 必须显式标注覆盖边界**，不假装覆盖了没加载的历史 |
 | G2 | **稳定锚点**：每条 **durable** 记录有可复制、跨页面重载不变的引用（未落定的合成记录明确不可深链） | 复制锚点 → 刷新 → 粘贴 → 精确回到同一条记录；合成记录的复制入口给出"未持久化"提示而非坏链 |
 | G3 | **不改官方行为**：官方「轨迹」页签、Chat、会话窗口语义完全不受影响 | 卸载本插件后一切恢复；与官方页签并存无冲突 |
 | G4 | **动作时间点与空档**：动作的起止**行内常驻**可见（不必悬停），且"什么都没发生"的间隔被**标注**出时长与保守归因 | 能回答"这条命令是几点跑的、几点结束"和"这两步之间那 4 小时在等什么" |
@@ -109,9 +109,13 @@
 
 两者都暴露，但不混用。可读标签是给人看的，稳定键是给机器解析的。
 
-### D2 — 全历史检索**改走宿主侧 FTS5**，放弃客户端分页灌窗口（初版判断已被实测推翻）
+### D2 — 全历史检索：两条路都实测不通，v1 只做「已加载窗口内检索」
 
-初版（2026-11-03）选的是"客户端 `loadOlder()` 分页 + 内存索引"，理由是"纯客户端、不动宿主、可回滚"。**2026-11-12 的实测把这条判断推翻了。**
+这一节记了**一个被两次实测推翻的判断**，完整保留证据链，避免第三次重走同一条路。
+
+#### 第一次判断（2026-11-03）：客户端 `loadOlder()` 分页 + 内存索引
+
+理由是"纯客户端、不动宿主、可回滚"。**2026-11-12 的语料审计把它推翻。**
 
 **实测数据**（审计本机 `~/.dsh/sessions`：376 个会话日志、压缩 213.99 MB、解压 677.80 MB、409,957 个事件）：
 
@@ -128,28 +132,54 @@
 
 三条致命结论：
 
-1. **窗口会被灌满且不回收。** 官方 event source 的 prepend 是纯 concat，**没有 eviction/上限**；Chat 主滚动区**没有虚拟化**——`useVirtualizer` 只属于 TurnNavigator 轨道（`dsh-client-ui-chat/lib/client.js:290`），主聊天区是全量 `entries.map(...)`（Chat 主滚动区的 `entries.map`）。所以 58 页历史会全部参与 React 渲染并常驻内存。滚动有 anchor 保护、历史不会被静默撤销，但**成本是实打实的**。
+1. **窗口会被灌满且不回收。** 官方 event source 的 prepend 是纯 concat，**没有 eviction/上限**；Chat 主滚动区**没有虚拟化**——`useVirtualizer` 只属于 TurnNavigator 轨道（`dsh-client-ui-chat/lib/client.js:290`），主聊天区是全量 `entries.map(...)`。所以 58 页历史会全部参与 React 渲染并常驻内存。
 2. **derive 是 O(N²)。** `deriveTraceTree`（region `pure helpers`）每次对全部 nodes 排序并多次全扫描；58 页累计扫描约 **1,864,792** 个事件（≈最终 59,108 的 **31.5 倍**）。
-3. **32 MiB 预算过于乐观。** 光 `hay` 就 22.49 MiB，还没算 Map、key、meta、数组和 station 对象。
+3. **32 MiB 预算过于乐观。** 光 `hay` 就 22.49 MiB，还没算 Map、key、meta 数组和 station 对象。
 
-**因此改用宿主侧 FTS5。** `dsh-session-query-sqlite` 提供 FTS5（`session_id = ?`），`dsh-session-query` 冷读完整日志并抽取 user/assistant/tool call/result/todo/turn-end 文本建文档。优点：**不进窗口**、无 O(N²) derive、无 Chat DOM 增长。代价：要启用 SQLite backend 并在宿主组合里挂上，且需要一条"查询结果 → station 坐标"的适配。
+#### 第二次判断（2026-11-12）：改走宿主侧 FTS5
 
-**启用路径已核实（比初版估计的简单得多）**：
+`dsh-session-query-sqlite` 提供 FTS5，`dsh-session-query` 冷读完整日志并抽取 user/assistant/tool call/result/todo/turn-end 文本建文档。**看起来**完全对症：不进窗口、无 O(N²) derive、无 Chat DOM 增长。启用路径也已核实——`session-query-sqlite` 在 `dsh-base` 里已挂载（`dsh-base/cordis.patch.yml:157-161`），`openAt` 合法值 `startup | first-search | never`（`dsh-session-query-sqlite/lib/index.js:1089-1093`），官方注解明说启用方式就是在更后的 patch 层覆盖 `openAt` 并配持久 `path`。
 
-- `session-query-sqlite` 在 `dsh-base` 里**已经挂载**（`dsh-base/cordis.patch.yml:157-161`），只是 `openAt: never` 默认关闭；`dsh-web-app/cordis.patch.yml:27-31` 又用 `:memory:` + `never` 重申了一次
-- 官方注解明说启用方式就是"在更后的 patch 层覆盖 `openAt` 为 `first-search` 或 `startup`，通常配一个持久 `path`"（`dsh-base/cordis.patch.yml:153-156`）
-- `openAt` 合法值为 `startup | first-search | never`（`dsh-session-query-sqlite/lib/index.js:1089-1093`）；`never` 时任何全文调用直接抛 `SESSION_QUERY_SEARCH_DISABLED`（`:594-595`）
-- **但检索工具 `dsh-tool-session-query` 默认没挂**，它只在 `dsh-experimental-session-search` bundle 里（该 bundle 自带一份 `isolate.sessionQuery` 的 `openAt: first-search`）
+**于是照做并实测：失败。**
 
-所以 M2 的实现路径是：**在 profile 的 `cordis.patch.yml` 覆盖 `openAt`（配持久 `path`），并挂上检索能力**——要么启用 `dsh-experimental-session-search` bundle，要么只挂工具行。不需要自己写 host 插件。
+把 `session-query-sqlite` 覆盖为 `path: <profile>/session-query.db` + `openAt: first-search`，删库重启，从页面里发 `POST /api/session/search`：
 
-**重要更正**：初版拒绝宿主方案的理由"这些工具默认排除调用方自身会话"**不成立**。`session_search` 确实排除调用方（`dsh-tool-session-query/lib/index.js:748-786`），但**同文件的 `session_event_search` 能检索调用方自身会话**：`targetId(args, caller)` 未显式指定时就是 `caller.id`（`:453-454`），只把上界压到当前调用 step 之前（`:794-798`）。工具描述也明说 "current session excludes the step performing this call"（`:965-966`）。
+| 观测 | 结果 |
+|---|---|
+| 返回耗时 | **426,673 ms**（约 7 分钟） |
+| 返回体 | `gateway/internal`：`session-search persistence observation did not stabilize after one retry`（`SESSION_QUERY_PERSISTENCE_FAILED`） |
+| 进程 CPU | 冲到 208% 后又回落到 0.1% |
+| `session-query.db` / `-wal` / `persisted_sessions` | 4096 B / 57,712 B / **0 行**——一笔都没提交 |
 
-**客户端分页未完全出局，但已降级**：只有在"独立/虚拟化的检索窗口"或"严格增量 derive + no-progress/generation 守卫 + 含对象开销的硬预算"这两条前提满足时才可行。按现稿不成立。
+**根因**（`dsh-session-query-sqlite/lib/index.js:707-756`，`_observeStable`）：
 
-### D3 — 索引是会话级、内存、可丢弃的派生数据
+1. 第 1 轮：`persistence.list()` → 对**每个**未索引且非活跃的会话 `readColdSessionLog` 全量冷读 → 再 `list()` 比对，不一致就 `continue`
+2. 第 2 轮重复一次；仍不一致 → 抛 `SESSION_QUERY_PERSISTENCE_FAILED`
+3. `STABLE_OBSERVATION_ATTEMPTS = 2`（`:474`），所以只有两次机会
 
-不落盘（v1）。理由：语料含工具结果全文，体积不可控且含潜在敏感内容；落盘还带来"索引与日志不一致"的一致性问题。代价是每次打开会话需重建（可接受：只在用户显式触发"拉全史"时付出）。
+本机语料 376 个日志、解压 677.8 MB，一轮冷读以**分钟**计；而 `list()` 的 revision 会随**任何**活跃会话写盘而变。只要有会话在写（GUI 常驻，本会话自身也在写），这个窗口就永远不稳定。**首次全量建索引在本机规模下不可行**，且 `_reconcile` 是 all-or-nothing——失败即整体不可用（`searchSessions`/`searchEvents` 全部报错，不是局部降级）。
+
+**顺带落出两条运维事实**（都实测过）：
+
+- 8 个 `version: 0` 遗留会话在 converter 里先抛 `subagent/descriptor ... unsupported descriptor version 2`，而 `_reconcile` 的 all-or-nothing 让**一条坏日志拖垮全部检索**
+- 这 8 个目录还以"扁平日志"形式直接放在 `~/.dsh/sessions/` 根下，会让 `listSessionDirs` 抛 `uses the unsupported flat-file layout`（`dsh-session-persistence-jsonl/lib/index.js:3523-3536`），**连带 5 个插件不激活**（workspace / session-controller / schedule / workspace-controller / ui-deliverables）。已移到 `~/.dsh/sessions-archive-v0/`，启动恢复单行、无告警
+
+#### v1 定稿：不做全史检索
+
+- **检索范围 = 当前已加载的轨迹窗口**（快照里已有的 `eventNodes`）：纯内存、零额外 I/O、零窗口污染
+- UI **必须显式标注覆盖边界**：`已检索 n 条 / 更早 12 页未加载`，并给出"加载更早"入口（沿用官方 `loadOlder()`），但**不自动**拉取——拉不拉由用户决定，因为代价（几十页常驻）是已知的
+- 锚点深链（§4）不受影响：解析在已加载窗口内进行；窗口外命中时提示"目标不在已加载范围"，而不是静默失败
+- README 写明本插件**不含跨会话检索**，那是官方轨迹页 / `session_event_search` 的路
+
+#### 升级路径（M3 候选，**未验证**，不得当成已有能力写进任何文档）
+
+1. **离线预建索引**：独立 Node 脚本（无 DSH 会话在写）直接驱动 `dsh-session-query` + `sqlite` 建库，之后 GUI 只做增量 reconcile（读取量小、窗口短，**可能**稳定）。未验证，且与 D3"不落盘"原则冲突，需重审
+2. **上游改 stability gate**：把"全语料快照比对"改成 per-session 比对，让活跃写入下的全量建索引可行
+3. **独立虚拟化检索窗口 + 受控分页**：§5.2 的全部守卫 + 自带虚拟滚动的面板，与 Chat 主区解耦
+
+### D3 — 若将来建索引：会话级、内存、可丢弃，不落盘
+
+**v1 根本不建索引**（D2 定稿）。这条只在将来做"显式拉全史 + 临时索引"时生效：不落盘。理由：语料含工具结果全文，体积不可控且含潜在敏感内容；落盘还带来"索引与日志不一致"的一致性问题，且**实测已证明宿主侧落盘索引在本机规模下建不起来**（§12.13）。代价是每次打开会话需重建（可接受：只在用户显式触发"加载更早"时付出）。
 
 ### D4 — 不碰官方槽位、不复用官方 view id
 
@@ -287,7 +317,9 @@ resolveAnchor(anchor)
 
 ---
 
-## 5. 全历史索引详设（G1）
+## 5. 索引详设（G1，**v1 不启用，保留作升级参考**）
+
+> **v1 不建索引。** 本节描述的是"若将来做跨页/全史检索"的数据结构与守卫，来源是第五轮复核。两条实现路径都已被实测否决（客户端分页：§12.8；宿主 FTS5：§12.13），但这里的条目模型、排序键、synthetic 规则在"用户显式点『加载更早』后对已拉取部分建临时索引"的场景下仍然有效。**读本节前先读 D2 定稿。**
 
 ### 5.1 数据结构
 
@@ -326,7 +358,7 @@ TrajectoryIndex = {
 
 ### 5.2 采集循环（受控）
 
-> **下面的客户端分页循环已被 D2 降级，不再是 v1 的主路径。** v1 改走宿主侧 FTS5（见 D2）。此节保留的原因：(a) 记录降级后的确切前提；(b) 若将来因宿主不可用而回退，需按此实现并满足全部守卫条件。
+> **下面的客户端分页循环不在 v1 范围内。** v1 只检索已加载窗口（见 D2 定稿）；宿主侧 FTS5 也已实测证伪。此节保留的原因：(a) 记录"用户显式点『加载更早』"时该循环必须满足的守卫；(b) 将来若做虚拟化检索窗口，按此实现。
 
 ```
 开始（用户显式触发）
@@ -422,8 +454,8 @@ TrajectoryIndex = {
 
 | 编号 | 风险 | 对策 |
 |---|---|---|
-| R1 | **拉全史把历史灌进会话窗口**：官方 prepend 无回收上限，Chat 主滚动区不虚拟化 → 58 页全部常驻并参与渲染 | **已实测确认代价过高**，v1 改走宿主 FTS5（D2）；客户端分页降级为备选且需满足 §5.2 全部守卫 |
-| R2 | **`deriveTraceTree` 是 O(N²)**：58 页累计扫描约 1,864,792 个事件（≈最终量的 31.5 倍） | 走宿主 FTS5 后此风险消失；若回退客户端分页，必须先做增量 derive（按 seq 增量 fold），不能每页全量重算 |
+| R1 | **拉全史把历史灌进会话窗口**：官方 prepend 无回收上限，Chat 主滚动区不虚拟化 → 58 页全部常驻并参与渲染 | **已实测确认代价过高**，v1 **不拉全史**：只检索已加载窗口（D2 定稿）；拉取改为用户显式动作且需满足 §5.2 全部守卫 |
+| R2 | **`deriveTraceTree` 是 O(N²)**：58 页累计扫描约 1,864,792 个事件（≈最终量的 31.5 倍） | v1 只 derive 已加载窗口，风险不触发；若将来真做分页拉取，必须先做增量 derive（按 seq 增量 fold），不能每页全量重算 |
 | R3 | 可读锚点 `t3s7` 在未解析全史时不稳 | 未解析时禁用可读形式，只给 `e{seq}` |
 | R4 | 上游快照字段变更导致解析失效 | 纯函数隔离 + smoke test 覆盖（**基线已验证为绿**）；失败时降级为"仅窗口搜索"而非崩溃 |
 | R5 | 与上游原版插件同时安装 → 界面出现**重复 tab**（两者 order 不同，不是抖动） | order 用 21；文档要求先移除原版并给出卸载命令 |
@@ -447,7 +479,7 @@ TrajectoryIndex = {
 1. **安装闭环（已于 2026-11-12 实测通过）**：`dsh plugin --profile web add <本地路径>` → `dsh --profile web --dump-config` 出现插件行 → 启动后客户端模块清单里出现 `dsh-trajectory-traceview/client.js`（紧邻官方 `dsh-client-ui-trajectory`）→ 拉到的 bundle 内含 `id: "dsh-trajectory-traceview"`、`id: "traceview"`、`order: 20` → `remove` 后 profile `package.json` 与组合树均无残留。**四项全过。**
 2. **单测（先跑基线）**：`node test/smoke.test.cjs` 必须全绿，再叠加新断言。**基线已于 2026-11-03 实测通过**：`TV PLUGIN SMOKE TEST (v5) OK — turns=4 steps=4 stations=11 tokensIn=750 model=deepseek-chat`
 3. **锚点闭环**：复制 → 刷新页面 → 粘贴解析 → 定位到同一条（含未加载历史的情况）
-4. **全史检索**：≥20 轮会话中搜索第 1–3 轮的工具参数，命中并能跳转
+4. **窗口内检索**：在已加载的 ≥20 轮轨迹里搜工具参数，命中并能跳转；**边界断言**：更早未加载的历史不得被判为"无结果"，UI 必须标注"更早 N 页未加载"
 5. **预算与中断**：拉取中中断，部分索引仍可搜，状态标注正确
 6. **共存性**：官方「轨迹」页签行为不变；卸载后无残留（视图、locale、样式）
 7. **降级**：故意喂坏快照/坏锚点，确认不崩、有提示
@@ -456,7 +488,7 @@ TrajectoryIndex = {
 10. **深链争用**：在 `loadOlder` 分页正在进行时触发深链，确认等待后重试成功，且失败会显式提示而非静默
 11. **孤立工具结果**：构造 `call === null` 的 `ToolResultNode`（助手头在窗口外），确认它有 `orphan-tool` station、可被搜索、`e{seq}` 与 `c{callId}` 都能定位
 12. **stale `p` 回收**：中止一个正在流式生成的 step，确认它的 `p` 条目被淘汰而非残留
-13. **宿主 FTS5 能查到当前会话**：确认 `session_event_search` 在 `session_id` 缺省时命中调用方自身历史（`dsh-tool-session-query/lib/index.js:453-454`），且上界只压到当前 step 之前（`:794-798`）
+13. ~~**宿主 FTS5 能查到当前会话**~~ **（已关闭：FTS5 建不起索引，见 §12.13）**。保留的实测结论：`session_event_search` 在 `targetId` 缺省时确实命中调用方自身历史（`dsh-tool-session-query/lib/index.js:453-454`），只把上界压到当前 step 之前（`:794-798`）——**这条能力存在，但本机规模的索引建不起来**
 14. **索引循环的三个守卫**（仅在回退客户端分页时适用）：resync 递增 `openGeneration` 后旧循环立即 abort；`loadOlder` 静默 return 时能在 2 页内识别无进展并停；达到预算时 UI 明确区分"已到会话开头"与"因预算停止"
 
 ---
@@ -466,7 +498,7 @@ TrajectoryIndex = {
 | 阶段 | 内容 | 说明 |
 |---|---|---|
 | **M1** | 锚点：整数 durable seq 稳定键 + 合成记录判别 + 可读标签 + 复制 + 深链解析（含 step id 修正、**O1 孤立工具结果 station**）<br>时间点（G4，仅纯呈现部分）：T1 行内起止 + T3 空档标注 + T4 时钟刻度 | 不碰索引层、不灌窗口、不花 token，风险最低，可独立交付 |
-| **M2** | 全历史检索改走**宿主侧 FTS5**：profile 覆盖 `session-query-sqlite.openAt`（配持久 `path`）+ 挂检索工具 + "查询结果 → station 坐标"适配；<br>G4 的 T2 时钟轴开关（需复刻官方投影，改动较大）<br>T5 KPI 拆分（先核实官方 `timing.source` 是否已覆盖） | 主要成本在这里。**客户端分页已实测不可行**（58 页全量常驻、derive O(N²)、预算低估），不再作为 v1 路径 |
+| **M2** | ~~全历史检索改走宿主侧 FTS5~~ → **窗口内检索 + 覆盖边界标注**（FTS5 已实测证伪，见 D2/§12.13）；<br>G4 的 T2 时钟轴开关（已完成：等距/按时钟切换）<br>T5 KPI 拆分（已完成：`timingRecorded` 三态） | 检索部分**成本大幅下降**：不再需要 profile 改动、不再需要宿主索引、不再需要"查询结果 → station 坐标"适配 |
 | **M3**（v2 候选） | 从某步 fork 重放 / 上下文归因 / 失败与循环标记 | 另出方案。**注**：fork 比原先估计便宜——客户端 `ctx.sessions.fork({sessionId, atSeq})` 已存在，Chat 侧还有官方 `forkAt(seq)` 可参照 |
 
 先做 M1 的理由：锚点是 M2 的基础（跳转要靠它定位）；G4 是纯呈现，能立刻验证我们对 `time` 字段的理解是否正确。两者都能单独验证"我们确实读懂了这套快照"。
@@ -479,10 +511,10 @@ TrajectoryIndex = {
 
 | # | 决策 | 默认取值 | 理由 |
 |---|---|---|---|
-| 1 | 索引默认开/关 | **默认关**，需显式触发建索引 | 默认开会在长会话里静默吃内存；建索引属有副作用操作，应由用户显式发起 |
-| 2 | 语料上限 | 单条 **4 KB**、总量 **24 MiB**（含每条 200–400 B 对象开销） | 实测：最大会话截断后 `hay` 已 22.49 MiB，原 32 MB 未计对象开销；触顶即停并明确告知覆盖范围 |
+| 1 | 是否建索引 | **v1 不建索引**（只对已加载窗口做内存过滤） | D2 两条路都实测不通；对已加载窗口过滤不需要索引，也就不存在"默认开/关"与内存预算问题 |
+| 2 | 检索语料上限 | 已加载窗口本身（无额外预算） | 实测最大会话截断后 `hay` 就有 22.49 MiB；一旦要跨页检索就必然撞预算，故 v1 不跨页（见 D2） |
 | 3 | 锚点形态 | **两套都给**：稳定键 `e{整数 seq}` + 可读 `t3s7` | 未解析全史时只给稳定键；解析后附可读形式 |
-| 4 | 接受"拉全史"灌入窗口 | **不接受（已反转）** | 实测 58 页历史会全部常驻 Chat 且不回收，代价过高；v1 改走宿主侧 FTS5（D2），不再灌窗口 |
+| 4 | 接受"拉全史"灌入窗口 | **不接受（已反转两次）** | 实测 58 页历史会全部常驻 Chat 且不回收；宿主侧 FTS5 又实测建不起索引（D2）→ v1 不灌窗口、不建索引，只检索已加载窗口 |
 
 ---
 
@@ -648,11 +680,11 @@ T3 的"空档归因"必须保守。我在会话里能看到的"等待"至少有�
 
 | 严重度 | 我的假设 | 实测 | 处置 |
 |---|---|---|---|
-| **P1 不可行** | 客户端 `loadOlder()` 分页 + 内存索引（D2 方案 A） | 最大会话 58,994 事件 / 92.8 MiB / **58 页**；官方 prepend **无 eviction**；Chat 主滚动区**不虚拟化**（`useVirtualizer` 只在 TurnNavigator，`dsh-client-ui-chat/lib/client.js:290` vs 主区全量 `entries.map` Chat 主滚动区的 `entries.map`）→ 58 页全部常驻并渲染 | **D2 反转**：v1 改走宿主侧 FTS5；客户端分页降级为备选并加全部守卫 |
+| **P1 不可行** | 客户端 `loadOlder()` 分页 + 内存索引（D2 方案 A） | 最大会话 58,994 事件 / 92.8 MiB / **58 页**；官方 prepend **无 eviction**；Chat 主滚动区**不虚拟化**（`useVirtualizer` 只在 TurnNavigator，`dsh-client-ui-chat/lib/client.js:290` vs 主区全量 `entries.map` Chat 主滚动区的 `entries.map`）→ 58 页全部常驻并渲染 | 方案 A 否决（保留）；当时改投宿主侧 FTS5，**该替代方案也已实测证伪**，见 §12.13 与 D2 定稿 |
 | **P1 复杂度** | "分页之间让出事件循环"即可（R2） | `deriveTraceTree` 对全 nodes 排序并多次全扫描（region `pure helpers`），58 页累计扫描 ≈**1,864,792** 个事件（≈最终 59,108 的 **31.5 倍**） | R2 改写：必须增量 fold，不能每页全量重算 |
 | **P1 预算** | 单条 4 KB、总量 **32 MB** | 仅截断后 `hay` 就 ≈**22.49 MiB**（1,044/6,834 条被截断），未计 Map/key/meta/数组/station 对象 | §5.3 与决策项 2 改为 **24 MiB 且计入对象开销**；触顶即停 |
 | **P1 未处理的失败** | 循环只写了"暂停/可中断" | `loadOlder` 在未打开/无 hasMore/已分页时**静默 return**（`session.js:313-318`），远端错误也被吞（`:327-335`）；resync 会递增 `openGeneration` 丢弃旧 stream（`:402-408`）；设计不检查 no-progress → **可能空转** | §5.2 增五个必须守卫（绑定 sessionId+generation、no-progress、append 后重基线、compaction 清空、切换即 abort）；新增 R15/R16 |
-| **P1 我拒绝方案 B 的理由错了** | "上述工具默认排除调用方自身会话" | `session_search` 排除调用方（`dsh-tool-session-query/lib/index.js:748-786`），但 **`session_event_search` 能查自身会话**：`targetId` 缺省即 `caller.id`（`:453-454`），只压上界到当前 step（`:794-798`） | D2 里明确更正这条；这正是改走宿主侧的依据 |
+| **P1 我拒绝方案 B 的理由错了** | "上述工具默认排除调用方自身会话" | `session_search` 排除调用方（`dsh-tool-session-query/lib/index.js:748-786`），但 **`session_event_search` 能查自身会话**：`targetId` 缺省即 `caller.id`（`:453-454`），只压上界到当前 step（`:794-798`） | D2 里已更正这条；但即便如此仍救不了宿主方案（见 §12.13），最终 v1 不做全史检索 |
 
 **这轮的教训与前四轮不同**：前四轮都是"文档内部不一致"，靠读代码就能发现；这轮是**假设与现实不符**——"客户端分页应该还行"这个判断，读多少代码都验不出来，只有拿真实会话跑一遍数据才知道要 58 页。**所以凡涉及规模/成本的判断，必须实测，不能推理。**
 
@@ -752,3 +784,28 @@ slot 错误       0
 **参数是算出来的，不是拍的**：初版用 `28 + 26·log₂`，30 秒就给 157px、5 分钟顶到上限，整条轨道失去区分度——**这是单测单调性断言当场抓出来的**（`n5m === n1h === 220`）。改为 `10 + 15·log₂` 后，30s≈84px、5m≈134px、1h≈187px、4h 后才触顶。
 
 **实测**（真实会话，77 个站点）：切换后 18 条空闲色带全部带 `data-on`，宽度 94/100/108/114px 随 47s/62s/92s/123s 递增。
+
+### 12.13 宿主侧 FTS5 实测证伪（2026-11-12）
+
+第五轮复核把 D2 从"客户端分页"推到"宿主侧 FTS5"，理由是前者代价过高。**这一轮证明后者在本机规模下根本建不起索引。**
+
+**做法**：`~/.dsh/profiles/web/cordis.patch.yml` 末尾覆盖 `session-query-sqlite` 为持久 `path` + `openAt: first-search`（`dsh-base` 与 `dsh-web-app` 两层原本设成 `:memory:` + `never`），删掉 `session-query.db*` 重启，再从页面内用 `POST /api/session/search` 发真实请求（`{type:'client-request', method:'session/search', payload:{args:{request:{query:'compose', limit:5}}}}`）。
+
+**结果**：
+
+| 观测 | 值 |
+|---|---|
+| 返回耗时 | 426,673 ms（≈7 分钟） |
+| 错误码 | `gateway/internal` / `session-search persistence observation did not stabilize after one retry`（`SESSION_QUERY_PERSISTENCE_FAILED`） |
+| 进程 CPU | 冲到 208%，随后回落到 0.1%（说明确实干了活，但没提交） |
+| `session-query.db` | 4096 B，`-wal` 57,712 B，`persisted_sessions` **0 行** —— 全程未提交 |
+
+**根因**（`dsh-session-query-sqlite/lib/index.js:707-756`）：`_observeStable` 的第 1 轮会 `persistence.list()` → 对每个未索引且非活跃会话全量 `readColdSessionLog` → 再 `list()` 比对，不一致即 `continue`；`STABLE_OBSERVATION_ATTEMPTS = 2`（`:474`），第二轮仍不一致就抛。本机 376 个日志 / 解压 677.8 MB，一轮冷读以分钟计，而 `list()` 的 revision 随任何活跃会话写盘即变——**只要有会话在写，全量建索引的稳定窗口就不存在**。且 `_reconcile` 是 all-or-nothing，失败后 `searchSessions`/`searchEvents` 整体报错，没有局部降级。
+
+**过程中发现的第二个坑**（同样实测）：8 个 `version: 0` 会话含 `subagent/descriptor` v2，converter 直接抛 `unsupported descriptor version 2`；由于 all-or-nothing，**一条坏日志就能让全部检索不可用**。把它们移走后索引才开始真正重建（CPU 起来），但仍卡在上面的稳定窗口问题上。
+
+**第三个坑**（与检索无关，但差点误判成插件故障）：这 8 个会话是"扁平日志"布局，直接放在 `~/.dsh/sessions/` 根下。`listSessionDirs` 会把它们当成 project 目录并抛 `uses the unsupported flat-file layout`（`dsh-session-persistence-jsonl/lib/index.js:3523-3536`），结果 `workspace` 失败并连带 5 个插件 pending（`session-controller` / `schedule` / `workspace-controller` / `ui-deliverables`）。**表面症状是"轨迹页没了"，实际是组合层挂了 5 个插件。** 归位到 `~/.dsh/sessions-archive-v0/` 后启动恢复单行、无告警。
+
+**处置**：撤掉覆盖，恢复 `openAt: never`；删掉 `session-query.db*`；D2 改为"v1 不做全史检索，只检索已加载窗口"（见 D2 定稿）。配置里保留一段注释记录这次证伪，避免后人重试。
+
+**这轮的教训**：第五轮复核给的"改走宿主侧 FTS5"建议，本身也是**未实测的推理**——它正确指出了方案 A 的成本，但把方案 B 当成了免责替代。**推翻一个方案不等于另一个方案成立**；替代方案同样要跑一遍真实规模，尤其是涉及"全量重建 + 快照一致性"这种必然与活跃写入冲突的机制。
