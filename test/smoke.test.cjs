@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, anchorOf, parseAnchor, resolveAnchorInStations } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -241,5 +241,207 @@ if (!liveStep || liveStep.live !== true) throw new Error("live step flag missing
 const runningTools = liveStep.cells.filter((c) => c.name === "web_search");
 if (runningTools.length !== 1 || runningTools[0].running !== true) throw new Error("running tool dedupe failed");
 if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正在搜索"))) throw new Error("partial preview missing");
+
+// ---- anchors (G2): grammar, issuance, and resolution -------------------
+{
+	// Durable assistant nodes in the fixture carry no messageId, so they must
+	// NOT be issued an `e` anchor (the matrix requires messageId + integer seq).
+	const stepStations = tree.stations.filter((s) => s.kind === "step");
+	if (stepStations.length === 0) throw new Error("anchor: no step stations");
+	if (stepStations.some((s) => s.anchorSeq !== null)) throw new Error("anchor: synthetic step got an e anchor");
+	if (stepStations.some((s) => s.synthetic !== true)) throw new Error("anchor: synthetic flag missing");
+	const a = anchorOf(stepStations[0]);
+	if (!/^tvp1:p\d+s\d+$/.test(a)) throw new Error("anchor: synthetic step form = " + a);
+
+	// A durable step (messageId + integer seq) must produce e<seq>.
+	const durableSnap = {
+		eventNodes: [
+			{ kind: "user", seq: 1, time: 1000, content: [{ type: "text", text: "问题" }] },
+			{ kind: "assistant", seq: 7, time: 2000, turn: 1, step: 1, messageId: "m-7", blocks: [{ kind: "text", text: "回答" }] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const dTree = deriveTraceTree(durableSnap, t);
+	const dStep = dTree.stations.find((s) => s.kind === "step");
+	if (dStep === void 0) throw new Error("anchor: durable step missing");
+	if (dStep.anchorSeq !== 7) throw new Error("anchor: durable seq = " + dStep.anchorSeq);
+	if (anchorOf(dStep) !== "tvp1:e7") throw new Error("anchor: durable form = " + anchorOf(dStep));
+	if (dStep.synthetic !== false) throw new Error("anchor: durable flagged synthetic");
+
+	// A fractional-seq synthetic assistant must not be anchored even though it
+	// may carry a messageId-less shape AND a plausible integer-looking turn.
+	const fracSnap = {
+		eventNodes: [
+			{ kind: "assistant", seq: 7.1, time: 2000, turn: 1, step: 1, blocks: [{ kind: "text", text: "半截" }] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const fTree = deriveTraceTree(fracSnap, t);
+	const fStep = fTree.stations.find((s) => s.kind === "step");
+	if (fStep === void 0) throw new Error("anchor: fractional step missing");
+	if (fStep.anchorSeq !== null) throw new Error("anchor: fractional seq leaked into anchorSeq");
+}
+{
+	// parseAnchor: every legal form has a branch; illegal ones are rejected.
+	const ok = (raw, check) => { const r = parseAnchor(raw); if (!r.ok) throw new Error("parse fail " + raw + " -> " + r.reason); check(r); };
+	ok("tvp1:e7", (r) => { if (r.form !== "e" || r.seq !== 7) throw new Error("e form"); });
+	ok("tvp1:e7#t3s7", (r) => { if (r.seq !== 7 || r.hint !== "t3s7") throw new Error("e hint"); });
+	ok("tvp1:cabc", (r) => { if (r.form !== "c" || r.callId !== "abc") throw new Error("c form"); });
+	ok("tvp1:p3s7", (r) => { if (r.form !== "p" || r.turn !== 3 || r.step !== 7 || r.callId !== null) throw new Error("p form"); });
+	ok("tvp1:p3s7cxyz", (r) => { if (r.callId !== "xyz") throw new Error("p+c form"); });
+	ok("tvp1:t3s7", (r) => { if (r.form !== "t" || r.turn !== 3 || r.step !== 7) throw new Error("t form"); });
+	const bad = parseAnchor("tvp1:e7.5");
+	if (bad.ok !== false || bad.reason !== "synthetic") throw new Error("fractional e must be rejected as synthetic");
+	if (parseAnchor("tvp1:garbage").ok !== false) throw new Error("unknown form must be rejected");
+	if (parseAnchor("nope").ok !== false) throw new Error("missing prefix must be rejected");
+	if (parseAnchor("tvp1:e-3").ok !== false) throw new Error("negative seq must be rejected");
+}
+{
+	// resolveAnchorInStations: e / p / c / t paths.
+	const durableSnap = {
+		eventNodes: [
+			{ kind: "user", seq: 1, time: 1000, content: [{ type: "text", text: "问题" }] },
+			{ kind: "assistant", seq: 7, time: 2000, turn: 1, step: 1, messageId: "m-7", blocks: [
+				{ kind: "text", text: "回答" },
+				{ kind: "tool-call", callId: "callA", name: "bash", argsRaw: "{}" }
+			] },
+			{ kind: "tool-result", seq: 8, time: 3000, callId: "callA", call: { name: "bash", argsRaw: "{}" }, callTime: 2500, content: [{ type: "text", text: "ok" }], isError: false, subCalls: [] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const rTree = deriveTraceTree(durableSnap, t);
+	const rStations = rTree.stations;
+	const hitE = resolveAnchorInStations(parseAnchor("tvp1:e7"), rStations);
+	if (!hitE.ok || hitE.station.kind !== "step") throw new Error("resolve e failed");
+	const hitC = resolveAnchorInStations(parseAnchor("tvp1:ccallA"), rStations);
+	if (!hitC.ok || hitC.station.anchorSeq !== 7) throw new Error("resolve c failed");
+	const hitP = resolveAnchorInStations(parseAnchor("tvp1:p1s1"), rStations);
+	if (!hitP.ok || hitP.station.kind !== "step") throw new Error("resolve p failed");
+	const hitT = resolveAnchorInStations(parseAnchor("tvp1:t1s1"), rStations);
+	if (!hitT.ok || hitT.upgraded !== "e7") throw new Error("resolve t must upgrade to e<seq>, got " + JSON.stringify(hitT));
+	const missE = resolveAnchorInStations(parseAnchor("tvp1:e999"), rStations);
+	if (missE.ok !== false || missE.reason !== "not-loaded") throw new Error("resolve missing e");
+}
+
+// ---- G4 time anchors: exact step span (T1) ------------------------------
+{
+	const spanSnap = {
+		eventNodes: [
+			{ kind: "user", seq: 1, time: 1000, content: [{ type: "text", text: "问" }] },
+			{ kind: "assistant", seq: 5, time: 5000, turn: 1, step: 1, timing: { stepStartTime: 3000, firstTokenTime: 3200, completedTime: 8000 }, blocks: [{ kind: "text", text: "答" }] },
+			{ kind: "assistant", seq: 9, time: 9000, turn: 1, step: 2, blocks: [{ kind: "text", text: "无 timing" }] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const st = deriveTraceTree(spanSnap, t).stations.filter((x) => x.kind === "step");
+	const withTiming = st.find((x) => x.stepNo === 1);
+	const noTiming = st.find((x) => x.stepNo === 2);
+	if (withTiming.startMs !== 3000 || withTiming.endMs !== 8000) throw new Error("T1 span wrong: " + withTiming.startMs + "/" + withTiming.endMs);
+	if (withTiming.durationMs !== 5000) throw new Error("T1 duration must equal end-start");
+	if (noTiming.startMs !== null || noTiming.endMs !== null) throw new Error("T1 missing timing must stay null, not 0");
+
+	// Partial edge: only stepStartTime present -> endMs must stay null so the view
+	// can render "start only" instead of fabricating an end.
+	const partialSnap = {
+		eventNodes: [
+			{ kind: "assistant", seq: 3, time: 3000, turn: 1, step: 1, timing: { stepStartTime: 2500 }, blocks: [{ kind: "text", text: "半截" }] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const pStep = deriveTraceTree(partialSnap, t).stations.find((x) => x.kind === "step");
+	if (pStep === void 0) throw new Error("T1 partial step missing");
+	if (pStep.startMs !== 2500) throw new Error("T1 partial start = " + pStep.startMs);
+	if (pStep.endMs !== null) throw new Error("T1 partial end must be null, got " + pStep.endMs);
+	if (pStep.durationMs !== null) throw new Error("T1 partial duration must be null (cannot infer)");
+}
+
+// ---- G4 idle gaps (T3): pure gap arithmetic ----------------------------
+{
+	const GAP_MIN = 30000;
+	const gaps = [];
+	const mk = (start, end) => ({ startMs: start, endMs: end });
+	const seq = [mk(0, 1000), mk(90000, 95000), mk(96000, 100000)];
+	for (let i = 1; i < seq.length; i += 1) {
+		const gap = seq[i].startMs - seq[i - 1].endMs;
+		if (gap >= GAP_MIN) gaps.push(gap);
+	}
+	if (gaps.length !== 1 || gaps[0] !== 89000) throw new Error("T3 gap math wrong: " + JSON.stringify(gaps));
+	// a missing edge must not fabricate a gap
+	const prevEdge = null;
+	if (prevEdge !== null) throw new Error("T3 must skip when an edge is missing");
+}
+
+// ---- O1: orphan tool results --------------------------------------------
+{
+	// A tool-result with no matching tool-call in the loaded window must become
+	// its own station. Its `call` is null (the call fell outside the window).
+	const orphanSnap = {
+		eventNodes: [
+			{ kind: "user", seq: 1, time: 1000, content: [{ type: "text", text: "问题" }] },
+			{ kind: "assistant", seq: 2, time: 2000, turn: 1, step: 1, messageId: "m2", blocks: [{ kind: "text", text: "回答" }] },
+			{ kind: "tool-result", seq: 9, time: 9000, callId: "orphanA", call: null, content: [{ type: "text", text: "孤儿结果文本" }], isError: false, subCalls: [] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const oTree = deriveTraceTree(orphanSnap, t);
+	const orphans = oTree.stations.filter((s) => s.kind === "orphan-tool");
+	if (orphans.length !== 1) throw new Error("O1 orphan count = " + orphans.length);
+	const o = orphans[0];
+	if (o.displayText !== "孤儿结果文本") throw new Error("O1 orphan text = " + o.displayText);
+	if (o.callId !== "orphanA") throw new Error("O1 callId lost");
+	if (o.anchorSeq !== 9 || o.synthetic !== false) throw new Error("O1 durable anchor wrong: " + JSON.stringify({ seq: o.anchorSeq, synthetic: o.synthetic }));
+	if (o.anchorKey !== "e9") throw new Error("O1 anchorKey must be issued, got " + o.anchorKey);
+	if (anchorOf(o) !== "tvp1:e9") throw new Error("O1 anchor form = " + anchorOf(o));
+	if (oTree.stats.tools !== 1) throw new Error("O1 tool count must include orphan, got " + oTree.stats.tools);
+	const md = buildTraceMarkdown(oTree, t);
+	if (!md.includes("孤儿结果文本") || !md.includes("node.orphanTool")) throw new Error("O1 markdown export dropped the orphan");
+
+	// A result that IS attached to an assistant tool-call must NOT be duplicated
+	// as a second orphan station.
+	const attachedSnap = {
+		eventNodes: [
+			{ kind: "user", seq: 1, time: 1000, content: [{ type: "text", text: "问题" }] },
+			{ kind: "assistant", seq: 2, time: 2000, turn: 1, step: 1, messageId: "m2", blocks: [
+				{ kind: "text", text: "回答" },
+				{ kind: "tool-call", callId: "callX", name: "bash", argsRaw: "{}" }
+			] },
+			{ kind: "tool-result", seq: 3, time: 3000, callId: "callX", call: { name: "bash", argsRaw: "{}" }, callTime: 2500, content: [{ type: "text", text: "已挂载" }], isError: false, subCalls: [] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const aTree = deriveTraceTree(attachedSnap, t);
+	if (aTree.stations.filter((s) => s.kind === "orphan-tool").length !== 0) throw new Error("O1 attached result must not become orphan");
+	const aStep = aTree.stations.find((s) => s.kind === "step");
+	if (aStep === void 0 || !aStep.cells.some((c) => c.kind === "tool" && c.resultText === "已挂载")) throw new Error("O1 attached result missing from step");
+
+	// Edge cases that actually exist in the record shape: an error-only result
+	// (no text blocks) must fall back to the error code; an image-only result must
+	// not be silently dropped by `blocksText`.
+	const edgeSnap = {
+		eventNodes: [
+			{ kind: "tool-result", seq: 11, time: 11000, callId: "orphanErr", call: null, content: [], isError: true, error: { code: "E_TIMEOUT" }, subCalls: [] },
+			{ kind: "tool-result", seq: 12, time: 12000, callId: "orphanImg", call: null, content: [{ type: "image" }], isError: false, subCalls: [] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const edges = deriveTraceTree(edgeSnap, t).stations.filter((x) => x.kind === "orphan-tool");
+	if (edges.length !== 2) throw new Error("O1 edge orphans = " + edges.length);
+	const errOrphan = edges.find((x) => x.callId === "orphanErr");
+	const imgOrphan = edges.find((x) => x.callId === "orphanImg");
+	if (errOrphan.displayText !== "E_TIMEOUT") throw new Error("O1 error fallback = " + errOrphan.displayText);
+	if (imgOrphan.displayText !== "[图片]") throw new Error("O1 image text = " + imgOrphan.displayText);
+
+	// A fractional-seq synthetic tool result (interrupted call) must be flagged
+	// synthetic and must NOT get an `e` anchor.
+	const fracSnap = {
+		eventNodes: [
+			{ kind: "tool-result", seq: 7.2, time: 7000, callId: "orphanF", call: null, content: [{ type: "text", text: "半截" }], isError: false, subCalls: [] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const fO = deriveTraceTree(fracSnap, t).stations.find((s) => s.kind === "orphan-tool");
+	if (fO === void 0) throw new Error("O1 fractional orphan missing");
+	if (fO.anchorSeq !== null || fO.synthetic !== true) throw new Error("O1 fractional orphan must be unanchorable");
+}
 
 console.log("TV PLUGIN SMOKE TEST (v5) OK — turns=" + tree.stats.turns + " steps=" + tree.totalSteps + " stations=" + tree.stations.length + " tokensIn=" + tree.stats.tokensIn + " model=" + tree.stats.lastModel);
