@@ -7,8 +7,10 @@
 > **把 DeepSeek Harness Web GUI 会话里 AI 的执行过程渲染成一条可回放的横向时间轴——每一步做了什么、每次发给大模型的原始请求都摊开在眼前。**
 > 专为「学习与调优提示词」设计：想弄清 AI 为什么这么回答？打开轨迹视图，看它思考了什么、调用了哪些工具、拿到了什么结果，以及它当时真正"看到"的消息载荷。
 
+> **这是增强版（Plus），不是上游原版。** 基于 [AFAP/dsh-trajectory-traceview](https://github.com/AFAP/dsh-trajectory-traceview)（MIT）改造：保留原版全部能力，新增稳定锚点、孤立工具结果站点、行内耗时、时钟轴、检索范围标注等。**与原版不要同时安装**（会出现两个「轨迹视图」标签），先 `dsh plugin --profile web remove dsh-trajectory-traceview`，再装本包。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/AFAP/dsh-trajectory-traceview)](https://github.com/AFAP/dsh-trajectory-traceview/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/MisonL/dsh-trajectory-traceview)](https://github.com/MisonL/dsh-trajectory-traceview/releases)
 
 ---
 
@@ -46,6 +48,20 @@
 - ✅ **⇣ 跟随模式**：AI 正在工作时新站点自动滚入视野；任何手动导航自动暂停跟随，⏭「显示全部」恢复。
 - ✅ **检查联动契约**：实现了会话视图的 `inspect` 深链协议——本标签处于活动时若收到工具检查请求，自动定位到包含该调用的站点。
 - ✅ **⬆ 加载更早历史**：长会话窗口外的事件一键分页加载（复用会话的 `hasMore` / `loadOlder`）。
+- ✅ **检索范围显式标注**（Plus 新增）：搜索只覆盖**当前已加载**的轨迹，所以命中计数旁会显示 `⬆ 仅已加载范围` 徽标——点它即可加载更早一页，新加载的站点立即纳入检索。**没加载的历史永远不会被误报成"无命中"**。
+
+### 站点可定位、可复制（Plus 新增）
+
+- ✅ 🔗 **稳定锚点**：每个站点都有可复制的引用（详情头部「🔗 复制锚点」），形如 `tvp1:e3019`。刷新页面、换设备、粘回搜索框都能精确回到同一条记录。
+- ✅ **合成记录不骗人**：还没落盘的记录（助手刚中断、工具调用被打断）给的是 `tvp1:p3s7` 形式的合成锚点，并明确标注"未持久化、不可深链"，不会给出刷新后就失效的链接。
+- ✅ **孤立工具结果也上轴**：窗口切分导致助手头不在窗口里的 `ToolResultNode`（`call === null`）不再丢失，单独成为 `orphan-tool` 站点，同样可搜索、可定位。
+
+### 时间看得见（Plus 新增）
+
+- ✅ **行内起止时间**：每个步骤卡片上直接写 `14:24:21 → 14:24:53`（不必悬停、不必点开详情）。
+- ✅ **耗时来源诚实标注**：区分「有耗时」「未记录耗时」「耗时不全」三态——**不会把"没记录"显示成 0**。
+- ✅ **空闲色带**：两个动作之间超过 30 秒的空档在轴上标注时长（`⏸ 47,628 ms`），回答"这两步之间那 4 小时在等什么"。
+- ✅ **⏱ 等距 / 按时钟切换**：等距模式站点均匀排列便于阅读，按时钟模式空闲色带按对数缩放，长等待肉眼可见。
 
 ### 每一步做了什么（底部「步骤详情」）
 
@@ -77,7 +93,7 @@
 ## 4. 目录结构
 
 ```
-dsh-trajectory-traceview/   # 仓库根 = npm 包根
+dsh-trajectory-traceview/   # 仓库根（npm 包名为 dsh-trajectory-traceview-plus）
 ├── package.json            # dsh.bundle.patch + dsh.client（浏览器端声明）+ exports["./client"]
 ├── cordis.patch.yml        # 组合行：仅插入一行插件记录（无路由、无配置）
 ├── LICENSE                 # MIT
@@ -94,23 +110,23 @@ dsh-trajectory-traceview/   # 仓库根 = npm 包根
 一键安装（GitHub）：
 
 ```powershell
-dsh plugin --profile web add github:AFAP/dsh-trajectory-traceview
+dsh plugin --profile web add github:MisonL/dsh-trajectory-traceview
 ```
 
 然后**重启 `dsh web`** 生效。
 
-> 安装后插件位于 `$DSH_HOME\profiles\web\node_modules\dsh-trajectory-traceview`（pnpm 从 GitHub 克隆），与源码仓库位置无关。
+> 安装后插件位于 `$DSH_HOME\profiles\web\node_modules\dsh-trajectory-traceview-plus`（pnpm 从 GitHub 克隆），与源码仓库位置无关。
 
 升级：
 
 ```powershell
-dsh plugin --profile web update dsh-trajectory-traceview
+dsh plugin --profile web update dsh-trajectory-traceview-plus
 ```
 
 卸载：
 
 ```powershell
-dsh plugin --profile web remove dsh-trajectory-traceview
+dsh plugin --profile web remove dsh-trajectory-traceview-plus
 ```
 
 ### 从源码目录手动安装（等价验证用）
@@ -161,7 +177,7 @@ dsh plugin --profile web add "G:\path\to\dsh-trajectory-traceview"
 
 | 现象 | 排查方向 |
 |---|---|
-| 看不到「轨迹视图」标签 | 确认已重启 `dsh web`；F12 Console 搜 `dsh-trajectory-traceview`。 |
+| 看不到「轨迹视图」标签 | 确认已重启 `dsh web`；F12 Console 搜 `dsh-trajectory-traceview-plus`。 |
 | 时间轴空白 / 无站点 | 会话需要已有 AI 执行轨迹（用户消息 → 助手步骤）；新会话无数据时面板显示空态提示。 |
 | 搜索无命中 | 检查搜索词是否匹配 工具名 / 参数 / 正文 / 错误名。 |
 | 消息列表与实际请求不符 | 「消息列表」是近似重建（原始 messages 不落快照），面板内已注明；以系统提示与工具目录为准。 |
@@ -185,7 +201,9 @@ node test/smoke.test.cjs
 
 ## 12. License
 
-MIT © AFAP
+MIT。原版 © [AFAP](https://github.com/AFAP/dsh-trajectory-traceview)；本增强版基于其 v0.3.0 改造，同样以 MIT 发布，文件名与版权声明保留。
+
+相对上游的实质改动（便于上游合并或比对）：稳定锚点与深链解析、孤立工具结果站点、步骤行内起止时间与耗时三态、空闲色带与时钟轴切换、检索范围标注、包名/视图 id 改为 `-plus` / `traceview-plus`（order 21，避免与原版冲突）。
 
 ---
 

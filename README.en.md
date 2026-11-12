@@ -7,8 +7,10 @@
 > **Render the AI execution flow of a DeepSeek Harness Web GUI session as a replayable, horizontal timeline — every step's actions and every raw request sent to the model, laid out in front of you.**
 > Built for learning and tuning prompts: wondering why the AI answered that way? Open Trace View to see what it reasoned about, which tools it called, what results it got, and the actual message payload it saw at the time.
 
+> **This is the Plus edition, not upstream.** Built on [AFAP/dsh-trajectory-traceview](https://github.com/AFAP/dsh-trajectory-traceview) (MIT): every upstream capability is kept, plus stable anchors, orphan tool-result stations, inline durations, a clock axis, and an explicit search-scope badge. **Do not install both** (you would get two "Trace View" tabs) — run `dsh plugin --profile web remove dsh-trajectory-traceview` first.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/AFAP/dsh-trajectory-traceview)](https://github.com/AFAP/dsh-trajectory-traceview/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/MisonL/dsh-trajectory-traceview)](https://github.com/MisonL/dsh-trajectory-traceview/releases)
 
 ---
 
@@ -46,6 +48,20 @@ session trajectory (views.get("trajectory") snapshot — reuses official data as
 - ✅ **⇣ follow mode**: while the AI is working, new stations auto-scroll into view; any manual navigation pauses following, ⏭ "show all" resumes it.
 - ✅ **Inspect deep-link contract**: implements the session view's `inspect` protocol — if a tool-inspection request arrives while this tab is active, it locates the station containing that call.
 - ✅ **⬆ load older history**: one-click paging for events outside the long-session window (reuses the session's `hasMore` / `loadOlder`).
+- ✅ **Explicit search scope** (Plus): search only covers the **currently loaded** trace, so the hit counter carries a `⬆ loaded range only` badge — click it to page in one more chunk, and the newly loaded stations join the search immediately. Unloaded history is **never** reported as "no match".
+
+### Locatable, copyable stations (Plus)
+
+- ✅ 🔗 **Stable anchors**: every station has a copyable reference (🔗 in the detail header) such as `tvp1:e3019` — reload, change device, paste it back and land on the same record.
+- ✅ **Honest about synthetic records**: records that are not yet durable (an interrupted assistant message, a tool call cut off mid-flight) get a `tvp1:p3s7`-style anchor and are explicitly marked "not persisted, not deep-linkable" instead of handing out a link that dies on reload.
+- ✅ **Orphan tool results still appear**: a `ToolResultNode` whose assistant header fell outside the window (`call === null`) is no longer lost — it becomes its own `orphan-tool` station, searchable and locatable like any other.
+
+### Time you can actually see (Plus)
+
+- ✅ **Inline start/end times**: each step card shows `14:24:21 → 14:24:53` directly — no hover, no detail panel.
+- ✅ **Honest duration provenance**: "has timing" / "no timing recorded" / "partial timing" are three distinct states — a missing record is never rendered as 0.
+- ✅ **Idle bands**: gaps longer than 30 s between two actions are labeled on the rail (`⏸ 47,628 ms`), answering "what were those 4 hours spent on".
+- ✅ **⏱ even / clock toggle**: even spacing for reading, clock mode scales idle bands logarithmically so long waits are visible at a glance.
 
 ### What each step did (bottom "Step Detail")
 
@@ -77,7 +93,7 @@ session trajectory (views.get("trajectory") snapshot — reuses official data as
 ## 4. Directory layout
 
 ```
-dsh-trajectory-traceview/   # repo root = npm package root
+dsh-trajectory-traceview/   # repo root (npm package name is dsh-trajectory-traceview-plus)
 ├── package.json            # dsh.bundle.patch + dsh.client (browser declaration) + exports["./client"]
 ├── cordis.patch.yml        # composition row: a single plugin record (no route, no config)
 ├── LICENSE                 # MIT
@@ -94,23 +110,23 @@ dsh-trajectory-traceview/   # repo root = npm package root
 One-line install (GitHub):
 
 ```powershell
-dsh plugin --profile web add github:AFAP/dsh-trajectory-traceview
+dsh plugin --profile web add github:MisonL/dsh-trajectory-traceview
 ```
 
 Then **restart `dsh web`** to take effect.
 
-> After installation the plugin lives at `$DSH_HOME\profiles\web\node_modules\dsh-trajectory-traceview` (cloned by pnpm from GitHub), independent of the source checkout location.
+> After installation the plugin lives at `$DSH_HOME\profiles\web\node_modules\dsh-trajectory-traceview-plus` (cloned by pnpm from GitHub), independent of the source checkout location.
 
 Upgrade:
 
 ```powershell
-dsh plugin --profile web update dsh-trajectory-traceview
+dsh plugin --profile web update dsh-trajectory-traceview-plus
 ```
 
 Uninstall:
 
 ```powershell
-dsh plugin --profile web remove dsh-trajectory-traceview
+dsh plugin --profile web remove dsh-trajectory-traceview-plus
 ```
 
 ### Manual install from a source directory (for equivalent verification)
@@ -161,7 +177,7 @@ Open any session with an AI execution trace → a "Trace View" tab appears next 
 
 | Symptom | Where to look |
 |---|---|
-| "Trace View" tab missing | Confirm `dsh web` was restarted; search F12 Console for `dsh-trajectory-traceview`. |
+| "Trace View" tab missing | Confirm `dsh web` was restarted; search F12 Console for `dsh-trajectory-traceview-plus`. |
 | Timeline empty / no stations | The session needs an AI execution trace (user message → assistant steps); brand-new sessions show the empty-state hint. |
 | Search finds nothing | The search term must match a tool name / arg / body text / error name. |
 | Message list differs from the real request | The list is an approximate rebuild (the original messages array is not snapshotted) — the panel marks this; treat the system prompt and tool catalog as authoritative. |
@@ -185,7 +201,9 @@ The tests run the helper region against mock snapshots covering: tree building /
 
 ## 12. License
 
-MIT © AFAP
+MIT. Upstream © [AFAP](https://github.com/AFAP/dsh-trajectory-traceview); this Plus edition is a derivative of v0.3.0, released under the same MIT terms with the original copyright notice kept.
+
+Substantive changes versus upstream: stable anchors and deep-link parsing, orphan tool-result stations, inline step start/end with three-state duration provenance, idle bands and the clock axis, search-scope badge, and package/view ids renamed to `-plus` / `traceview-plus` (order 21) so the two never collide.
 
 ---
 

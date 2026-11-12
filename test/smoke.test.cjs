@@ -1,4 +1,4 @@
-// Smoke test for dsh-trajectory-traceview (v5): extract the pure helpers
+// Smoke test for dsh-trajectory-traceview-plus (v5): extract the pure helpers
 // region from lib/client.js and run it against mock TrajectorySnapshot data,
 // covering tool results, raw-request attachment (lazy messages), special
 // stations (compaction w/ compaction-request / turn-error / retry / command),

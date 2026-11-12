@@ -1,4 +1,4 @@
-# dsh-trajectory-traceview bundle patch: adds this local plugin row to the web
+# dsh-trajectory-traceview-plus bundle patch: adds this local plugin row to the web
 # profile composition. Applied as a bundle layer (dsh.bundle.patch) after
 # dsh-base and dsh-web-app, so the row lands beside the other dsh.client rows.
 #
@@ -6,5 +6,5 @@
 # the row a valid Loader entry, while the real surface (the "轨迹视图" mind-map
 # tab next to 轨迹) lives in the browser bundle discovered via dsh.client exports.
 - insert:
-    - id: dsh-trajectory-traceview
-      name: dsh-trajectory-traceview
+    - id: dsh-trajectory-traceview-plus
+      name: dsh-trajectory-traceview-plus
