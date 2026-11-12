@@ -480,7 +480,7 @@ TrajectoryIndex = {
 
 ## 8. 验证计划
 
-1. **安装闭环（已于 2026-11-12 实测通过）**：`dsh plugin --profile web add <本地路径>` → `dsh --profile web --dump-config` 出现插件行 → 启动后客户端模块清单里出现 `dsh-trajectory-traceview/client.js`（紧邻官方 `dsh-client-ui-trajectory`）→ 拉到的 bundle 内含 `id: "dsh-trajectory-traceview"`、`id: "traceview"`、`order: 20` → `remove` 后 profile `package.json` 与组合树均无残留。**四项全过。**
+1. **安装闭环（已于 2026-11-12 实测通过）**：`dsh plugin --profile web add <本地路径>` → `dsh --profile web --dump-config` 出现插件行 → 启动后客户端模块清单里出现 `dsh-trajectory-traceview-plus/client.js`（紧邻官方 `dsh-client-ui-trajectory`）→ 拉到的 bundle 内含 `id: "dsh-trajectory-traceview-plus"`、`id: "traceview-plus"`、`order: 21` → 页面里 `<style data-plugin-css>` 为 `dsh-trajectory-traceview-plus/traceview.css` → `remove` 后 profile `package.json` 与组合树均无残留。**四项全过。**
 2. **单测（先跑基线）**：`node test/smoke.test.cjs` 必须全绿，再叠加新断言。**基线已于 2026-11-03 实测通过**：`TV PLUGIN SMOKE TEST (v5) OK — turns=4 steps=4 stations=11 tokensIn=750 model=deepseek-chat`
 3. **锚点闭环**：复制 → 刷新页面 → 粘贴解析 → 定位到同一条（含未加载历史的情况）
 4. **窗口内检索**：在已加载的 ≥20 轮轨迹里搜工具参数，命中并能跳转；**边界断言**：更早未加载的历史不得被判为"无结果"，UI 必须标注"更早 N 页未加载"
