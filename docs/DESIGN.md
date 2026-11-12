@@ -187,7 +187,11 @@
 - 不动 `conversation.trajectory.images`、`conversation.chat.flow` 等标记 `shadows-shipped-ui` 的槽
 - 与上游原版插件**不共存**：官方原版是 order 10，本插件当前是 order 20（改名后计划提到 21），两者 order 不同，但会同时注册两个标签页，界面出现**重复 tab**；文档写明须先移除原版。另：`loadThrough` 在普通 `loadOlder` 正在分页时会直接返回（`client.js:346-351`），且其失败会被吞掉（`client.js:313-335`），所以深链定位必须等待/重试并显式传播失败，不能假定一次调用就到位。
 
-### D5 — 身份与打包改造
+### D5 — 身份与打包改造（**已落地，2026-11-12**）
+
+下表"本方案"列已全部实施并实测（`refactor(D5)` 提交）。实测方式：`dsh plugin --profile web remove dsh-trajectory-traceview` → `add /Volumes/Work/code/dsh-trajectory-traceview` → 重启 → 页面断言 style 标签为 `dsh-trajectory-traceview-plus/traceview.css`、页签仍为 3 个、77 站点 / 72 步骤跨度 / 5 孤立站点 —— 全部符合。
+
+> 顺带修正一处判断：变更 `package.json` 的 `name` 之后，**必须先 remove 旧包名再 add**，否则 pnpm 的 link 目录名（旧名）与包内 `name`（新名）不一致，profile 里会留下一个指向同一目录、却以旧名注册的依赖。
 
 | 项 | 上游 | 本方案 | 位置 |
 |---|---|---|---|
@@ -841,3 +845,15 @@ D2 从"全史检索"降级为"已加载窗口内检索"后，代码上的实际�
 最后一行是重点：这个 chip 不是装饰——**点一下确实会多加载一页并把新命中的站点纳入搜索**。
 
 **仍未做到的**：截图。`Page.captureScreenshot` 在这个 DOM 规模下稳定超时（1,674 节点时必现），所以"视觉观感"这一项**至今没有证据**，只能说布局测量值（站点数、跨度行、色带宽度）都符合设计，不能说"看起来没问题"。
+
+### 12.15 收尾优化（2026-11-12）
+
+**1. profile 配置瘦身**：D2 那段 10 行长注释压成 4 行，保留"不要再试"的结论与文档指针（`~/.dsh/profiles/web/cordis.patch.yml`，3826 B）。401 修复的 `llm-deepseek` / `llm-deepseek-account` 禁用块原样保留。
+
+**2. 归档目录加说明，不删数据**：8 个旧会话移到 `~/.dsh/sessions-archive-v0/`（1.8 MB）并写入 `README.md`，记录三件事——为什么必须移出（扁平布局会让 5 个插件不激活）、为什么加载不了（descriptor v2）、以及**想恢复时必须同时做**"放进 project 目录改成 `session-<uuid>`"和"格式升到 v3"。**没有删除任何会话文件**：这是用户数据，决定权不在我。
+
+**3. D5 身份改造落地**（见 D5）：包名 / patch id / 客户端模块 id / 样式标签 id / `dataset.plugin` / view id / order / `engines` / 仓库地址，共 9 处，加 README 中英各 8 处、测试头部 1 处。`version` 从 0.3.0 提到 0.4.0——功能集已明显超出上游。
+
+**4. README 补齐说明**：新增"检索范围显式标注""站点可定位可复制""时间看得见"三组特性，顶部加醒目的"这是增强版、不要与原版同装"，License 段补上游署名与实质改动清单（MIT 要求，也便于将来给上游提 PR）。
+
+**验证**：改名重装后重启单行无告警；3 个页签（`对话` / `轨迹` / `轨迹视图`）；77 站点 = 72 步骤 + 5 孤立；`dstv_spanRow` 72 条；搜 `bash` → `1/54 命中` + `⬆ 仅已加载范围`；单测全绿。
