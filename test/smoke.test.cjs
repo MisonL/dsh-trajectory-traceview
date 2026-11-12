@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -491,6 +491,16 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (n1h < 170) throw new Error("T2 hour-scale width too small: " + n1h);
 	// and a full day must actually hit the cap rather than keep growing
 	if (clockGapWidth(86400000, true) !== "220px") throw new Error("T2 day-scale must cap at 220px");
+
+	// ── D2: search scope must be explicit, never silently "no match" ─────────
+	// Fully loaded session: nothing to warn about.
+	if (searchScopeNote(false, false, (k) => k) !== null) throw new Error("D2 must be silent when the whole session is loaded");
+	// Older pages exist: the note must be present whatever the other flags say.
+	if (searchScopeNote(true, false, (k) => k) !== "search.scopePartial") throw new Error("D2 must flag the loaded-only range");
+	if (searchScopeNote(true, true, (k) => k) !== "search.scopeLoading") throw new Error("D2 must show paging progress while loading older");
+	// Truthiness traps: only real booleans count (session snapshot fields are optional).
+	if (searchScopeNote(undefined, false, (k) => k) !== null) throw new Error("D2 must treat undefined hasMore as fully loaded");
+	if (searchScopeNote(true, undefined, (k) => k) !== "search.scopePartial") throw new Error("D2 must treat undefined loadingOlder as idle");
 }
 
 console.log("TV PLUGIN SMOKE TEST (v5) OK — turns=" + tree.stats.turns + " steps=" + tree.totalSteps + " stations=" + tree.stations.length + " tokensIn=" + tree.stats.tokensIn + " model=" + tree.stats.lastModel);
