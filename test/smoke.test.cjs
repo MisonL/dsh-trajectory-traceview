@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, anchorOf, parseAnchor, resolveAnchorInStations } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -442,6 +442,55 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	const fO = deriveTraceTree(fracSnap, t).stations.find((s) => s.kind === "orphan-tool");
 	if (fO === void 0) throw new Error("O1 fractional orphan missing");
 	if (fO.anchorSeq !== null || fO.synthetic !== true) throw new Error("O1 fractional orphan must be unanchorable");
+}
+
+// ---- T5: distinguish "no timing" from "edge outside window" --------------
+{
+	const noTiming = {
+		eventNodes: [
+			{ kind: "assistant", seq: 3, time: 3000, turn: 1, step: 1, messageId: "m3", blocks: [{ kind: "text", text: "无 timing" }] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const a = deriveTraceTree(noTiming, t).stations.find((x) => x.kind === "step");
+	if (a.timingRecorded !== false) throw new Error("T5 no-timing must be recorded=false");
+	if (a.startMs !== null || a.endMs !== null) throw new Error("T5 no-timing edges must stay null");
+
+	// timing present but only completedTime (start fell outside the window)
+	const partial = {
+		eventNodes: [
+			{ kind: "assistant", seq: 4, time: 4000, turn: 1, step: 1, messageId: "m4", timing: { stepStartTime: null, firstTokenTime: null, completedTime: 4000 }, blocks: [{ kind: "text", text: "半截" }] }
+		],
+		requests: [], callSchemas: new Map(), runningCalls: []
+	};
+	const b = deriveTraceTree(partial, t).stations.find((x) => x.kind === "step");
+	if (b.timingRecorded !== true) throw new Error("T5 partial timing must be recorded=true");
+	if (b.endMs !== 4000) throw new Error("T5 partial end = " + b.endMs);
+	if (b.startMs !== null) throw new Error("T5 partial start must be null");
+	if (b.durationMs !== null) throw new Error("T5 partial duration must be null, not inferred from a single edge");
+	// The two cases must be distinguishable — that is the whole point of T5.
+	if (a.timingRecorded === b.timingRecorded) throw new Error("T5 cases collapsed into one state");
+}
+
+// ---- T2: clock-mode gap width -------------------------------------------
+{
+	if (clockGapWidth(120000, false) !== null) throw new Error("T2 must be null when clock mode is off");
+	if (clockGapWidth(NaN, true) !== null) throw new Error("T2 must reject non-finite gap");
+	if (clockGapWidth(0, true) !== null) throw new Error("T2 must reject zero gap");
+
+	const w30 = clockGapWidth(30000, true);
+	const w5m = clockGapWidth(300000, true);
+	const w1h = clockGapWidth(3600000, true);
+	if (!/^\d+px$/.test(w30)) throw new Error("T2 width format = " + w30);
+	const n30 = parseInt(w30, 10), n5m = parseInt(w5m, 10), n1h = parseInt(w1h, 10);
+	// monotonic: a longer pause must never be narrower
+	if (!(n30 < n5m && n5m < n1h)) throw new Error("T2 must be monotonic: " + [n30, n5m, n1h].join(","));
+	// capped so one huge pause cannot dominate the rail
+	if (n1h > 220) throw new Error("T2 must cap at 220px, got " + n1h);
+	// still meaningful at the hour scale (must not sit near the floor)
+	if (n1h < 170) throw new Error("T2 hour-scale width too small: " + n1h);
+	// and a full day must actually hit the cap rather than keep growing
+	if (clockGapWidth(86400000, true) !== "220px") throw new Error("T2 day-scale must cap at 220px");
 }
 
 console.log("TV PLUGIN SMOKE TEST (v5) OK — turns=" + tree.stats.turns + " steps=" + tree.totalSteps + " stations=" + tree.stations.length + " tokensIn=" + tree.stats.tokensIn + " model=" + tree.stats.lastModel);
