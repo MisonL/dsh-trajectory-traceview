@@ -52,7 +52,8 @@ session trajectory (views.get("trajectory") snapshot — reuses official data as
 
 ### Locatable, copyable stations (Plus)
 
-- ✅ 🔗 **Stable anchors**: every station has a copyable reference (🔗 in the detail header) such as `tvp1:e3019` — reload, change device, paste it back and land on the same record.
+- ✅ 🔗 **Stable anchors**: every station has a copyable reference (🔗 in the detail header) such as `tvp1:e3019`. Paste it into the 🔗 box in the toolbar and press Enter; **the address bar mirrors it as `#tvp1:e3019`**, so the link survives a reload and can be shared.
+- ✅ **Cross-page locating**: when the target sits in unloaded history, older pages are pulled automatically until it appears (page-bounded; on hitting the cap it says "not in the loaded window" instead of pretending to succeed).
 - ✅ **Honest about synthetic records**: records that are not yet durable (an interrupted assistant message, a tool call cut off mid-flight) get a `tvp1:p3s7`-style anchor and are explicitly marked "not persisted, not deep-linkable" instead of handing out a link that dies on reload.
 - ✅ **Orphan tool results still appear**: a `ToolResultNode` whose assistant header fell outside the window (`call === null`) is no longer lost — it becomes its own `orphan-tool` station, searchable and locatable like any other.
 
