@@ -200,7 +200,16 @@ node test/smoke.test.cjs
 
 自测用 mock 快照覆盖：树构建 / 请求附加 / 压缩请求配对 / 子调用详情 / prompt diff / 步骤计时 / 搜索匹配 / Markdown 导出 / token 统计。
 
-## 12. License
+## 12. 兼容性与数据契约
+
+本插件读取 DSH 官方的轨迹快照（`eventNodes` / `requests` / `callSchemas` / `partial` / `runningCalls`）。因为快照来自另一个插件、契约不由本插件所有，所以有两条明确承诺：
+
+- **畸形数据不会让页面崩**：`null`、错型、缺字段一律降级跳过，并有显式 `⚠ N 条记录结构异常` 提示。
+- **版本不兼容会大声说**：如果 DSH 升级后字段名或节点类型变了，头部显示 `⚠ N 条记录无法识别 [类型名]`；若**一条都认不出**，显示「无法识别当前会话的轨迹数据格式」并列出原因码——**不会伪装成"暂无数据"或一份看起来正常的残缺轨迹**。
+
+`engines.dsh` 目前钉在 `=0.2.1-rc.5`（本机实测版本），后续实测通过再放宽。
+
+## 13. License
 
 MIT。原版 © [AFAP](https://github.com/AFAP/dsh-trajectory-traceview)；本增强版基于其 v0.3.0 改造，同样以 MIT 发布，文件名与版权声明保留。
 

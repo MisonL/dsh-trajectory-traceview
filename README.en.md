@@ -200,7 +200,16 @@ node test/smoke.test.cjs
 
 The tests run the helper region against mock snapshots covering: tree building / request attachment / compaction-request pairing / sub-call detail / prompt diff / step timing / search matching / Markdown export / token stats.
 
-## 12. License
+## 12. Compatibility and data contract
+
+This plugin reads the official trajectory snapshot (`eventNodes` / `requests` / `callSchemas` / `partial` / `runningCalls`). Because that snapshot comes from another plugin and the contract is not ours, there are two explicit promises:
+
+- **Malformed data never crashes the page**: `null`, wrong types and missing fields are skipped with an explicit `⚠ N record(s) malformed` notice.
+- **Version drift is stated loudly**: if a DSH upgrade renames fields or node kinds, the header shows `⚠ N record(s) not recognized [kinds]`; if *nothing* is recognizable you get "Cannot recognize this session's trajectory data" with reason codes — **never a silent "no data yet" or a plausible-looking partial trace**.
+
+`engines.dsh` is pinned to `=0.2.1-rc.5` (the version verified locally); it will be widened once further versions are tested.
+
+## 13. License
 
 MIT. Upstream © [AFAP](https://github.com/AFAP/dsh-trajectory-traceview); this Plus edition is a derivative of v0.3.0, released under the same MIT terms with the original copyright notice kept.
 

@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -690,6 +690,72 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (dupTree.stats.tools !== 1) throw new Error("R3 duplicate tool call counted " + dupTree.stats.tools + " times");
 	const dupCells = dupTree.stations.flatMap((st) => (st.cells ?? []).filter((c) => c.kind === "tool" && c.callId === "dup1"));
 	if (dupCells.length !== 1) throw new Error("R3 duplicate tool rendered " + dupCells.length + " times");
+
+	// ── i18n parity: every key the code asks for must exist in BOTH locales ──
+	// (Found two real misses: zh lacked anchor.capped, both lacked detail.request.
+	//  t() falls back silently, so a missing key ships as a raw dotted id in the UI.)
+	{
+		const zhS = src.indexOf("const zh = {");
+		const enS = src.indexOf("const en = {");
+		if (zhS < 0 || enS < 0) throw new Error("I18N locale tables not found");
+		const grab = (block) => new Set([...block.matchAll(/^\s+"([\w.]+)":/gm)].map((m) => m[1]));
+		const zhKeys = grab(src.slice(zhS, enS));
+		const enKeys = grab(src.slice(enS, enS + 20000));
+		const used = new Set([...src.matchAll(/\bt\("([\w.]+)"\)/g)].map((m) => m[1]));
+		const missZh = [...used].filter((k) => !zhKeys.has(k));
+		const missEn = [...used].filter((k) => !enKeys.has(k));
+		if (missZh.length > 0) throw new Error("I18N keys missing from zh: " + missZh.join(", "));
+		if (missEn.length > 0) throw new Error("I18N keys missing from en: " + missEn.join(", "));
+		const onlyZh = [...zhKeys].filter((k) => !enKeys.has(k));
+		const onlyEn = [...enKeys].filter((k) => !zhKeys.has(k));
+		if (onlyZh.length > 0) throw new Error("I18N keys only in zh: " + onlyZh.join(", "));
+		if (onlyEn.length > 0) throw new Error("I18N keys only in en: " + onlyEn.join(", "));
+	}
+
+	// ── the pack must not be near-empty for non-step stations ────────────────
+	// Six station kinds keep their payload on the station (not in `cells`), so a
+	// cells-only pack silently produced a title with no evidence.
+	const specialStations = [
+		["orphan-tool", { kind: "orphan-tool", name: "bash", args: "{\"c\":1}", resultText: "ORPHAN-BODY", isError: true, errorName: "Exit 9" }],
+		["error", { kind: "error", message: "ERROR-BODY", code: "E_TURN" }],
+		["retry", { kind: "retry", message: "RETRY-BODY", code: "E_OVERLOAD", retry: 2, maxRetries: 5 }],
+		["compaction", { kind: "compaction", summary: "COMPACT-BODY", count: 5, tokens: 200 }],
+		["command", { kind: "command", name: "/clear", args: "--all", outcomeText: "CMD-BODY" }],
+		["maxTokens", { kind: "maxTokens" }]
+	];
+	for (const [kind, station] of specialStations) {
+		const pack = buildStepMarkdown(station, [], false, t);
+		// a pack that is only a heading is a broken promise
+		const body = pack.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#") && !l.startsWith(">"));
+		if (body.length === 0) throw new Error("PACK " + kind + " pack carries no content: " + JSON.stringify(pack));
+	}
+	// each payload must actually appear
+	for (const [kind, station, needle] of [
+		["orphan-tool", specialStations[0][1], "ORPHAN-BODY"],
+		["error", specialStations[1][1], "ERROR-BODY"],
+		["retry", specialStations[2][1], "RETRY-BODY"],
+		["compaction", specialStations[3][1], "COMPACT-BODY"],
+		["command", specialStations[4][1], "CMD-BODY"]
+	]) {
+		if (!buildStepMarkdown(station, [], false, t).includes(needle)) throw new Error("PACK " + kind + " pack dropped its payload (" + needle + ")");
+	}
+	// orphan tool packs must carry args + error, not just the result text
+	const orphanPack = buildStepMarkdown(specialStations[0][1], [], false, t);
+	if (!orphanPack.includes("Exit 9")) throw new Error("PACK orphan pack dropped the error name");
+	if (!orphanPack.includes("\"c\"")) throw new Error("PACK orphan pack dropped the args");
+
+	// ── fmtDur must scale its unit; a long session's KPI is otherwise unreadable ─
+	const durCases = [
+		[null, "—"], [0, "—"], [-5, "—"], [NaN, "—"], [Infinity, "—"],
+		[850, "850 ms"], [1500, "1.5 s"], [60000, "1.0 min"],
+		[300000, "5.0 min"], [3600000, "1.0 h"], [7200000, "2.0 h"]
+	];
+	for (const [input, want] of durCases) {
+		const got = fmtDur(input);
+		if (got !== want) throw new Error("DUR fmtDur(" + String(input) + ") = " + got + ", want " + want);
+	}
+	// boundary: just under a minute is still seconds
+	if (!fmtDur(59999).endsWith(" s")) throw new Error("DUR 59999 ms must stay in seconds");
 
 	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
 	// Window-edge steps routinely lack stepStartTime / completedTime; the three
