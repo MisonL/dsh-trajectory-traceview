@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -501,6 +501,44 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	// Truthiness traps: only real booleans count (session snapshot fields are optional).
 	if (searchScopeNote(undefined, false, (k) => k) !== null) throw new Error("D2 must treat undefined hasMore as fully loaded");
 	if (searchScopeNote(true, undefined, (k) => k) !== "search.scopePartial") throw new Error("D2 must treat undefined loadingOlder as idle");
+
+	// ── G2: an anchor that is not loaded must trigger a bounded back-page ────
+	// `e<seq>` carries an exact seq, so we can ask for exactly that far back.
+	if (anchorLoadTarget(parseAnchor("tvp1:e3019")) !== 3019) throw new Error("G2 e-anchor must target its own seq");
+	if (anchorLoadTarget(parseAnchor("tvp1:e0")) !== 0) throw new Error("G2 e0 must target seq 0");
+	// `c<callId>` / `p..` / `t..` have no seq: the only safe ask is "search the whole history".
+	if (anchorLoadTarget(parseAnchor("tvp1:ctool-1")) !== 0) throw new Error("G2 c-anchor must page from the beginning");
+	if (anchorLoadTarget(parseAnchor("tvp1:p3s7")) !== 0) throw new Error("G2 p-anchor must page from the beginning");
+	if (anchorLoadTarget(parseAnchor("tvp1:t3s7")) !== 0) throw new Error("G2 t-anchor must page from the beginning");
+	// Garbage must not trigger any paging at all.
+	if (anchorLoadTarget(parseAnchor("nope")) !== null) throw new Error("G2 invalid anchor must not page");
+	if (anchorLoadTarget(parseAnchor("tvp1:e12.5")) !== null) throw new Error("G2 synthetic (fractional seq) must not page");
+	if (anchorLoadTarget(null) !== null) throw new Error("G2 null parse must not page");
+
+	// ── G2: stop paging once the window already covers the requested seq ──────
+	if (anchorSeqFloor([]) !== null) throw new Error("G2 floor of an empty window is unknown");
+	const floorStations = [
+		{ anchorSeq: 500 }, { anchorSeq: 120 }, { anchorSeq: 900 }, { anchorSeq: null }
+	];
+	if (anchorSeqFloor(floorStations) !== 120) throw new Error("G2 floor must be the smallest anchorSeq");
+	// synthetic / missing seqs must never masquerade as the floor
+	if (anchorSeqFloor([{ anchorSeq: null }, { anchorSeq: 12.5 }, {}]) !== null) throw new Error("G2 floor must ignore non-integer seqs");
+
+	// ── G2: landing on an anchor must become a shareable URL ─────────────────
+	// The decision is an explicit flag, never "did the string change" — strings are
+	// primitives, so `a === b` is true even when the function rebuilt the same text.
+	const h1 = nextHashFor("", "tvp1:e3019");
+	if (h1.hash !== "#tvp1:e3019" || h1.changed !== true) throw new Error("G2 must write a missing anchor into the hash");
+	const h2 = nextHashFor("#tvp1:e1", "tvp1:e3019");
+	if (h2.hash !== "#tvp1:e3019" || h2.changed !== true) throw new Error("G2 must replace a stale hash");
+	// Already there -> must NOT rewrite, or history.replaceState fires on every render.
+	const h3 = nextHashFor("#tvp1:e3019", "tvp1:e3019");
+	if (h3.changed !== false) throw new Error("G2 must not rewrite an unchanged hash");
+	// A missing anchor must never wipe an existing one.
+	const h4 = nextHashFor("#tvp1:e3019", "");
+	if (h4.hash !== "#tvp1:e3019" || h4.changed !== false) throw new Error("G2 must never clear a hash by accident");
+	const h5 = nextHashFor("#keep", null);
+	if (h5.hash !== "#keep" || h5.changed !== false) throw new Error("G2 must tolerate a missing anchor");
 }
 
 console.log("TV PLUGIN SMOKE TEST (v5) OK — turns=" + tree.stats.turns + " steps=" + tree.totalSteps + " stations=" + tree.stations.length + " tokensIn=" + tree.stats.tokensIn + " model=" + tree.stats.lastModel);
