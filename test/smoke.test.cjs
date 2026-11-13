@@ -591,6 +591,24 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (packTool !== void 0 && !pack.includes(String(packTool.resultText).slice(0, 40))) {
 		throw new Error("STEP pack must embed the tool result text, got: " + pack.slice(0, 200));
 	}
+	// sub-calls are half the story of a failed step: they must survive into the pack
+	const subStation = (() => {
+		const subSnap = { eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "c9", name: "bash", argsRaw: "{}" }] },
+			{ kind: "tool-result", seq: 3, time: 3000, callId: "c9", call: { name: "bash", argsRaw: "{}" }, content: [{ type: "text", text: "Y".repeat(5000) }], isError: false,
+				subCalls: [{ kind: "tool-result", callId: "s1", name: "inner-tool", callTime: 50, time: 100, content: [{ type: "text", text: "SUB-TOOL-OUTPUT" }], isError: false }] }
+		], requests: [], runningCalls: [], partial: null };
+		return deriveTraceTree(subSnap, t).stations.find((st) => st.kind === "step");
+	})();
+	const subPack = buildStepMarkdown(subStation, [], false, t);
+	if (!subPack.includes("SUB-TOOL-OUTPUT")) throw new Error("STEP pack must include sub-call output");
+	if (!subPack.includes("inner-tool")) throw new Error("STEP pack must name the sub-call");
+	// a truncated result must SAY it was truncated
+	const yRun = (subPack.match(/Y+/g) ?? [""]).sort((a, b) => b.length - a.length)[0];
+	if (yRun.length !== 4000) throw new Error("STEP pack result cap not applied: " + yRun.length);
+	// fmtInt formats thousands ("5,000"), so assert the number, not the raw digit run.
+	if (!subPack.includes("…")) throw new Error("STEP pack must mark a truncated result with an ellipsis");
+	if (!/5,?000/.test(subPack)) throw new Error("STEP pack must state the original length of a truncated result");
 	// a null station must not throw (defensive: panel can render before selection settles)
 	if (buildStepMarkdown(null, [], false, t) !== "") throw new Error("STEP null station must yield empty string");
 
@@ -641,6 +659,37 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	// the simulated upgrade: valid contract, zero recognizable nodes -> incompatible
 	if (snapshotContract({ eventNodes: [{ kind: "message.user", seq: 1 }] }).ok !== true) throw new Error("DRIFT renamed kinds still pass the field check (by design)");
 	if (isEverythingUnknown([{ kind: "message.user", seq: 1 }], unknownNodeStats([{ kind: "message.user", seq: 1 }])) !== true) throw new Error("DRIFT a renamed-kind snapshot must be treated as incompatible");
+
+	// ── R3: projection correctness (found by the third review) ───────────────
+	// (a) a snapshot whose only content is a user message must not be dropped
+	const userOnly = deriveTraceTree({ eventNodes: [
+		{ kind: "user", seq: 1, time: 1000, content: [{ type: "text", text: "只有我" }] }
+	], requests: [], runningCalls: [], partial: null }, t);
+	if (userOnly.stations.length !== 1) throw new Error("R3 user-only snapshot lost its station: " + userOnly.stations.length);
+	if (userOnly.stations[0].kind !== "user") throw new Error("R3 user-only station kind = " + userOnly.stations[0].kind);
+
+	// (b) a user message that starts a NEW turn must not be attached to the old one
+	const twoTurns = deriveTraceTree({ eventNodes: [
+		{ kind: "assistant", seq: 5, time: 5000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "答一" }] },
+		{ kind: "user", seq: 10, time: 10000, content: [{ type: "text", text: "第二轮提问" }] }
+	], requests: [], runningCalls: [], partial: null }, t);
+	const turnNodes = twoTurns.children.filter((c) => c.kind === "turn");
+	const ownerOfLateUser = turnNodes.filter((tn) => tn.children.some((c) => c.kind === "user" && c.text === "第二轮提问"));
+	if (ownerOfLateUser.length !== 1) throw new Error("R3 the second user message must belong to exactly one turn");
+	if (ownerOfLateUser[0].label.includes("1 ") || /\b1\b/.test(ownerOfLateUser[0].label) && !/\b2\b/.test(ownerOfLateUser[0].label)) {
+		throw new Error("R3 the second user message was attached to turn 1: " + ownerOfLateUser[0].label);
+	}
+
+	// (c) the same in-flight tool described by BOTH runningCalls and partial counts once
+	const dupSnap = { eventNodes: [
+		{ kind: "assistant", seq: 5, time: 5000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "a" }] }
+	], requests: [], runningCalls: [
+		{ callId: "dup1", turn: 1, step: 2, name: "bash", argsRaw: "{}", time: 6000 }
+	], partial: { turn: 1, step: 2, blocks: [{ kind: "tool-call", callId: "dup1", name: "bash", argsRaw: "{}" }] } };
+	const dupTree = deriveTraceTree(dupSnap, t);
+	if (dupTree.stats.tools !== 1) throw new Error("R3 duplicate tool call counted " + dupTree.stats.tools + " times");
+	const dupCells = dupTree.stations.flatMap((st) => (st.cells ?? []).filter((c) => c.kind === "tool" && c.callId === "dup1"));
+	if (dupCells.length !== 1) throw new Error("R3 duplicate tool rendered " + dupCells.length + " times");
 
 	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
 	// Window-edge steps routinely lack stepStartTime / completedTime; the three
