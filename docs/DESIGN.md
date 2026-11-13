@@ -445,8 +445,8 @@ TrajectoryIndex = {
 | `lib/client.js` · styles（219–399） | `tagId`（390）与 `dataset.plugin`（393）改名，避免与原版共用同一 `<style id>` |
 | `lib/client.js` · locale（12–218） | 新增索引状态、锚点复制/解析、错误提示文案（zh/en 同 key 集） |
 | **`lib/client.js` · `//#region pure helpers` · 改动项 O1** | **新建孤立工具结果 station**：主循环目前**没有 `n.kind === "tool-result"` 分支**（只在首遍塞进 `resultsById`，`:567`），工具 cell 仅由助手 `tool-call` 块（助手 `tool-call` 块产出工具 cell 处）或 runningCalls（runningCalls 产出工具 cell 处）产出。因此当 assistant 头在窗口外（`records.d.ts:156-175` 的 `call === null`）时，该 durable 结果**既无 station 也无法 seek**。需在 `deriveTraceTree` 增一类 `orphan-tool` station（携带 `ToolResultNode.seq`、`callId`、`content`、`isError`、`call === null` 标记），并让其参与站点列表与索引；UI 上以"结果（调用头在窗口外）"呈现 |
-| `lib/client.js` · region `pure helpers` | 新增 `anchorOf(station)`、`parseAnchor(str)`、`toIndexEntry(station, limits)`、`mergeIndex(prev, entries)`、`searchIndex(index, query)`、`resolveInIndex(index, anchor)`；`deriveTraceTree` 补 `anchorKey` / `anchorSeq`（step 另开字段，写入点 `deriveTraceTree` 的 durable 补正处（`if (st.seq > n.seq)`），签发条件见 §4.1），step 站点 id 不再用 `s{stepCounter}` |
-| `lib/client.js` · region `horizontal timeline + replay component` | 搜索改走索引；索引状态条；复制锚点；`hash`/`focus` 解析；定位改用 `session.loadThrough(seq)`（不再手写分页循环）；**删除 `inspect`/`onInspectDone` 死参数（`:1181`、旧的 `inspect` 深链块）并用 `viewRequest.focus` + `completeViewRequest()` 重写该深链** |
+| `lib/client.js` · region `pure helpers` | 新增 `anchorOf` / `parseAnchor` / `resolveAnchorInStations` / `anchorLoadTarget` / `anchorSeqFloor` / `nextHashFor` / `searchScopeNote`（**均已实现**）；<br>**`toIndexEntry` / `mergeIndex` / `searchIndex` / `resolveInIndex` 已随 D2 取消，不实现**；`deriveTraceTree` 补 `anchorKey` / `anchorSeq`（step 另开字段，写入点 `deriveTraceTree` 的 durable 补正处（`if (st.seq > n.seq)`），签发条件见 §4.1） |
+| `lib/client.js` · region `horizontal timeline + replay component` | 搜索改走**当前窗口内存过滤**（不是索引，见 D2 定稿）+ 覆盖范围徽标；🔗 锚点粘贴输入框；详情头部复制锚点；`viewRequest.focus` + `location.hash` + `hashchange` 三入口统一走 `anchorApply`；失败/未加载都有显式提示。<br>**定位没有用 `session.loadThrough(seq)`——实测它无效**（见 §12.16），改为有界 `loadOlder()` 循环 |
 | `lib/client.js` · entry（2061–2095） | 除 `id`/`order` 外基本不动（已 inject `slots/locale/sessions`） |
 | `test/smoke.test.cjs` | 扩展：锚点往返、索引幂等合并、截断标记、搜索命中、解析失败分支、合成记录判别；文件头注释里的旧包名同步改 |
 | `README.md` / `README.en.md` | **各 8 处旧包名**：安装/升级/卸载命令、安装后路径、F12 调试提示；另补来源标注、改动说明、与原版不共存、锚点语法与边界 |
@@ -857,3 +857,48 @@ D2 从"全史检索"降级为"已加载窗口内检索"后，代码上的实际�
 **4. README 补齐说明**：新增"检索范围显式标注""站点可定位可复制""时间看得见"三组特性，顶部加醒目的"这是增强版、不要与原版同装"，License 段补上游署名与实质改动清单（MIT 要求，也便于将来给上游提 PR）。
 
 **验证**：改名重装后重启单行无告警；3 个页签（`对话` / `轨迹` / `轨迹视图`）；77 站点 = 72 步骤 + 5 孤立；`dstv_spanRow` 72 条；搜 `bash` → `1/54 命中` + `⬆ 仅已加载范围`；单测全绿。
+
+### 12.16 G2 收敛：锚点闭环、以及 `loadThrough` 被实测证伪（2026-11-13）
+
+**背景**：G2 的验收判据是"复制锚点 → 刷新 → 粘贴 → 精确回到同一条记录"。改动前只完成了"生成 + 解析"，**没有粘贴入口，也没有跨页定位**——能复制出一串 `tvp1:e3019`，但用户无处可粘。这一节记补齐过程。
+
+#### 补上的三件事
+
+1. **🔗 锚点粘贴输入框**（工具栏）：回车定位，Esc 清空；解析失败、目标未持久化、目标未加载都各有明确提示（`anchor.bad` / `anchor.notPersisted` / `anchor.notLoaded`），并常驻头部状态条，不会只挂在详情面板里看不见。
+2. **URL 哈希双向联动**：定位成功后 `history.replaceState` 写入 `#tvp1:...`；反向也监听 `hashchange`，手改 URL 或浏览器后退都能重新定位。**刷新页面仍停在同一条记录**（实测）。
+3. **跨页自动向前翻页**：目标不在当前窗口时，自动调用 `loadOlder()` 直到命中。
+
+#### 实测：`session.loadThrough(seq)` 不可用
+
+原设计（§6 旧稿）写的是"定位改用 `session.loadThrough(seq)`（不再手写分页循环）"。**真机验证表明这条行不通。**
+
+观测（真实会话，57 站点）：
+
+| 调用 | 返回 | 站点数 | 说明 |
+|---|---|---|---|
+| `loadThrough(1)` | 解析成功 | **57 → 57** | 没变化 |
+| `loadOlder()` | 解析成功 | **57 → 118** | 正常 |
+
+埋点进一步确认：`loadThrough` 确实动了 `baseSeq`（`inject` 里比对 `session.baseSeq` 前后不同，返回 `moved: true`），但**轨迹投影没有任何波动**——`stationsRef.current[0].anchorSeq` 仍然是 11693，`e1` 一次都没出现。
+
+读官方实现（`dsh-api-session-controller/lib/types/client/sessions/session.js:337-396`）能对上：`loadThrough` 的循环体是 `events.prepend(...)`，累积到 `pending.pages`，收尾时 `if (generation === this.openGeneration && pending.pages.length > 0) this.prependWindow(...)`。也就是说它只在**事件源**这一层拼接，而没有走 `loadOlder` 那条会触发会话投影重建的路径；同时它有一串**静默早退**（`openState !== 'open'` / `!hasMore` / `baseSeq <= seq` / `loadingOlder`），调用方拿不到任何失败信号。
+
+**结论**：跨页定位改回 `loadOlder()` 有界循环，并用 `anchorSeqFloor()`（当前窗口最小 `anchorSeq`）判断"已经翻到覆盖目标的位置就停"，避免无谓地拉全史。循环同时受 `ANCHOR_MAX_PAGES = 40` 与 `hasMore` 双重约束。
+
+#### 真机验证（跨页）
+
+| 场景 | 结果 |
+|---|---|
+| 窗口 57 站点，粘贴 `tvp1:e1` | 自动翻页到 **1348 站点**（窗口下界推进到 `e203`）；`e1` 在该会话中确实不存在，故如实提示"不在当前窗口"——**没有假装成功** |
+| 同一会话粘贴 `tvp1:e203` | 定位成功，URL 变为 `#tvp1:e203`，详情锚点读数 `tvp1:e203` |
+| **冷启动**：直接打开 `?token=…&tvp1:e203` | 自动翻到 1348 站点并定位到 `tvp1:e203`，无需任何手动操作 |
+| 单元测试 | 全绿；4 个变异（floor 取最大 / 不翻页 / 非法锚点也翻页 / 哈希不去重）全部变红 |
+
+#### 顺手修掉的两个真 bug
+
+1. **`nextHashFor` 的"是否改写"判据是错的**：初版写成"返回值是否等于入参"。字符串是原始值，函数重新拼出同样的文本时 `===` 仍为 `true`——这个断言**抓不到变异**（实测变异后测试照常全绿）。改为显式返回 `{hash, changed}`，调用方只看 `changed`。
+2. **测试断言用值比较代替身份比较**：同上的根因，一并改掉。
+
+#### 一处仍未验证
+
+`ANCHOR_MAX_PAGES = 40` 是否够用取决于单个会话的页数（最大真实会话 58 页）。触顶时会如实提示"不在当前窗口"，不会静默失败；但**没有真实样本触发过触顶**，所以这个上限的实际表现属于未验证项。
