@@ -208,7 +208,9 @@ This plugin reads the official trajectory snapshot (`eventNodes` / `requests` / 
 - **Version drift is stated loudly**: if a DSH upgrade renames fields or node kinds, the header shows `⚠ N record(s) not recognized [kinds]`; if *nothing* is recognizable you get "Cannot recognize this session's trajectory data" with reason codes — **never a silent "no data yet" or a plausible-looking partial trace**.
 - **The host is never accused wrongly**: `kind: "unknown"` is a *named* node kind in the contract (the host saying "I do not model this event"), so it renders as a first-class station carrying the event type and its raw payload, and it is **not** counted as drift. Only genuinely unseen kinds raise the alarm — one exotic event must not make the whole tree claim the format is unrecognized.
 
-`engines.dsh` is pinned to `=0.2.1-rc.5` (the version verified locally). `0.2.2-rc.1` was checked by **static contract diff** (`request-inspection.d.ts`, `ConvViewOwnerProps`, the `conversation.view` slot definition, the `ConversationNode` union and `trajectory-contract.d.ts` are byte-identical; the projection type diff is purely additive), but the plugin has **not been run against 0.2.2**, so the pin is not widened yet.
+`engines.dsh` is pinned to `=0.2.2-rc.2` (verified live on 2026-11-14). The earlier `=0.2.1-rc.5` conclusions are kept in `docs/DESIGN.md` §12.25–§12.27.
+
+**Why a hard pin instead of a range**: DSH validates `engines.dsh` at boot and *skips* an unmatched plugin outright (`skipping profile bundle … requirements {"engines.dsh":…}`) instead of degrading. Getting the pin wrong therefore makes the whole tab vanish — louder and easier to explain than a build that looks fine and misbehaves inside.
 
 ## 13. License
 

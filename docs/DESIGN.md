@@ -1366,3 +1366,70 @@ requirements {"engines.dsh":"=0.2.1-rc.5"}
 #### 隔离实跑的善后
 
 隔离环境共占约 1.4 GB（`/tmp/dsh222` 913 MB / `/tmp/dshhome222` 466 MB / 拷贝实验件），实验后全部删除；测试用插件副本 `/tmp/tv222test` 与两个契约对比包也一并删除。用户的 `~/.dsh` 与 0.2.1 实例未做任何修改（验证：3080 仍在跑，401 正常）。
+
+### 12.27 升级实况：DSH 0.2.1-rc.5 → 0.2.2-rc.2 + dsh-tui 0.18.0 → 0.20.0（2026-11-14）
+
+用户要求"升级到最新版本，注意 dsh-tui 也要升级适配"。§12.26 当时留的悬案（"没能在 0.2.2 上验证注册与投影"）在这次真机升级里**全部拿到证据了**。
+
+#### 版本矩阵
+
+| 层 | 升级前 | 升级后 |
+|---|---|---|
+| `@deepseek-ai/dsh` | 0.2.1-rc.5 | **0.2.2-rc.2** |
+| `@deepseek-harness-tui/dsh-tui` | 0.18.0 | **0.20.0** |
+| `engines.dsh`（本插件） | `=0.2.1-rc.5` | **`=0.2.2-rc.2`** |
+| `dsh-union-search` | 0.10.20（白名单卡在 0.2.1 线） | **0.10.22**（`>=0.1.1-rc.2 <0.3.0`） |
+| hook 协议 / claude-code hooks | 0.2.1-rc.5 | **0.2.2-rc.2** |
+| 插件版本 | 0.7.0 | **0.8.0** |
+
+#### 为什么是 rc.2 而不是 `latest`(rc.1)
+
+dsh-tui 0.20.0 的 `dsh-adapter/contract.js` 写着："0.2.2-rc.2 = primary continuous-CI line"。npm 的 `latest` 标签还指着 rc.1，但 rc.2 才是 TUI 持续集成主跑的那条线。**选 rc.2 是让两个包落在它们各自 CI 覆盖的交叉点上**，不是为了追新。
+
+#### 途中撞到的三件事（都是真问题，不是配置偷懒）
+
+**(1) 升级后浏览器打不开页面。**`page.goto` 一直超时、`fetch` 报 `Failed to fetch`，而 `curl` 一切正常；表面症状是"页面空白"。
+
+真因：0.2.2 收紧了 `/api` 的 `Host` 头校验，ego 浏览器发出的请求被拒，于是 HTML 拿到了、脚本请求全丢。加 `--trusted-host 127.0.0.1:3080 --trusted-host localhost:3080` 后恢复正常。
+
+**这一条我差点判错**：第一次带 trusted-host 启动时成功，但那台浏览器里已经留了 `dsh-auth-…` cookie，无法排除"其实是 cookie 生效"。于是补做了对照实验——清空该 origin 的全部 cookie 后访问裸 `http://127.0.0.1:3080/`（不带 token），页面正常渲染出 209 字符的侧栏。**结论成立：是 trusted-host 起的作用，不是 cookie 残留。**
+
+**(2) `?token=` 是一次性的。**消费后 `/?token=…` 一律 303 到 `./`。所以自动化里"每次 goto 都带 token"其实是第一跳就 303，后面靠 cookie。我一度连续多次 `newPage()` 开新标签，把浏览器拖到加载不出任何文档（`location` 显示 `blank`、`htmlLen 39`）——这是**测试方法把自己搞挂**，不是应用的 bug。记录在此以免下次误判。
+
+**(3) dsh-tui 0.20.0 自带一个内部矛盾。**它的 `lib/types/dsh-adapter/contract.js` 里 `UPSTREAM_VALIDATED_VERSIONS` **已经列了** `0.2.2-rc.1` 和 `0.2.2-rc.2`，注释也写明 rc.2 是主 CI 线；但 `cli/adapters/dsh/index.mjs` 里执行闸门的 `validated` 集合**只冻结到 0.2.1-rc.5**。结果：`dst cli <任意命令>` 全部报
+
+```
+dst: ADAPTER_UNAVAILABLE: This adapter validates DSH 0.2.0-rc.2, …, 0.2.1-rc.5; use dst dsh for another runtime
+```
+
+交互 TUI 本身正常（`doctor` 全绿），只有 `cli` 这条子命令被自己的硬编码白名单挡住。
+
+处置：**按最小面打补丁**（用户已授权"升级适配"）。只把契约里**已经声明支持**的两个 0.2.2 预发布版加进那个集合，不顺手放宽到 `0.2.2-rc.3`（未验证）或任意版本（那会把"不兼容"这个真实风险放掉）。补丁点同时打在两处：全局安装与 profile 内的副本（两者 md5 相同，必须一致），并在代码里留注释说明为什么。
+
+备份：`/tmp/dsh-tui-adapter-index.mjs.bak-20261114-005940`。
+
+#### 这次终于拿到的证据（§12.26 缺的那些）
+
+在 **0.2.2-rc.2 真机**上（真实会话、真实 Web UI）：
+
+| 验证点 | 结果 |
+|---|---|
+| 页签存在（`轨迹视图` 与内置 `轨迹` 并存） | ✅ |
+| slot 注册生效、视图真的渲染 | ✅ `stmt 66` 站点、66 张卡片 |
+| `ctx.locale.register` / `bind` 生效 | ✅ 无 raw i18n key（`node.*` / `detail.*` / `chip.*` 零泄漏） |
+| 契约漂移告警未误报 | ✅ `incompat 0`、`data-slot-error 0` |
+| 点站点 → 详情面板跟随 | ✅ 点第 31 站 → `站点 31 / 66`，`复制本步复盘` 在位 |
+| URL hash 锚点深链 | ✅ `#tvp1:e3019` → `data-active=30` 并滚动到位 |
+| 跨页锚点分页 | ✅ 66 → 454 → …，期间显示"正在向前加载更早历史以定位…" |
+| 回放控件 | ✅ 点击后 `data-dim=true` 站点数 423 → 621 |
+| KPI / 单位自适应 | ✅ `4 轮次 / 49 步骤 / 65 工具 / 2 错误` |
+
+**TUI 侧**：`dsh-tui doctor` 全绿（launcher ↔ profile 0.20.0 对齐、`dsh 0.2.2-rc.2`、凭据已设置）；`cli session list --limit 3` 返回真实会话；`cli session show <id>` 读出 v4 日志头；`cli session export <id>` 导出 Markdown。
+
+`cli auth status` 返回 `CAPABILITY_UNAVAILABLE` —— 这是**该命令在新运行时下的既有行为**（它只报告凭据存在性），而 `doctor` 里 `DEEPSEEK_API_KEY: 已设置` 与 `models list` 都有输出，所以我按"这一条没拿到证据"记录，不写成通过也不写成失败。
+
+#### 结论
+
+- 升级完成，**web / dsh-tui / headless 三个 profile 全部对齐**，启动日志零 `skipping` / `incompatible`
+- 本插件钉到 `=0.2.2-rc.2`，版本 0.8.0
+- 唯一需要人工记住的运维事实：**0.2.2 起 Web 服务要带 `--trusted-host`**，否则浏览器侧静默拿不到脚本
