@@ -484,16 +484,16 @@ TrajectoryIndex = {
 2. **单测（先跑基线）**：`node test/smoke.test.cjs` 必须全绿，再叠加新断言。**基线已于 2026-11-03 实测通过**：`TV PLUGIN SMOKE TEST (v5) OK — turns=4 steps=4 stations=11 tokensIn=750 model=deepseek-chat`
 3. **锚点闭环**：复制 → 刷新页面 → 粘贴解析 → 定位到同一条（含未加载历史的情况）
 4. **窗口内检索**：在已加载的 ≥20 轮轨迹里搜工具参数，命中并能跳转；**边界断言**：更早未加载的历史不得被判为"无结果"，UI 必须标注"更早 N 页未加载"
-5. **预算与中断**：拉取中中断，部分索引仍可搜，状态标注正确
-6. **共存性**：官方「轨迹」页签行为不变；卸载后无残留（视图、locale、样式）
-7. **降级**：故意喂坏快照/坏锚点，确认不崩、有提示
+5. ~~**预算与中断**~~ **（作废：索引已随 D2 取消，无边可中断）**
+6. **共存性（2026-11-13 实测通过）**：官方「轨迹」页签在切换前后 `main` 的 `innerText` 长度与节点数**完全一致**（15068 字符 / 1425 节点），切回后 `dstv_` 残留节点 0；卸载并重启后页签只剩 `对话` / `轨迹`、`style[data-plugin-css]` 里 `traceview` 为 0 条、`data-slot-error` 0；重新安装后页签恢复 3 个、站点 57、锚点输入框在位
+7. **降级（2026-11-13 实测并修复）**：初版**会崩**——`eventNodes` 含 `null` 抛 `Cannot read properties of null (reading seq)`，`runningCalls` 传对象抛 `not iterable`，`requests` 传对象抛 `not iterable`。已加 `safeList()` 统一强制转换，13 组畸形输入全部不崩且返回空树；单测固化
 8. **合成记录**：构造一个被中断的合成前缀（小数 seq），确认它被标识为"未持久化/不可深链"，且不会把小数喂给 `loadThrough`；落定为 durable 整数 seq 后锚点仍可用
-9. **窗口边界**：在只加载了窗口尾部的会话里，确认缺 `stepStartTime` / 缺 call 配对的记录不显示为 0 或 NaN
-10. **深链争用**：在 `loadOlder` 分页正在进行时触发深链，确认等待后重试成功，且失败会显式提示而非静默
-11. **孤立工具结果**：构造 `call === null` 的 `ToolResultNode`（助手头在窗口外），确认它有 `orphan-tool` station、可被搜索、`e{seq}` 与 `c{callId}` 都能定位
-12. **stale `p` 回收**：中止一个正在流式生成的 step，确认它的 `p` 条目被淘汰而非残留
+9. **窗口边界（2026-11-13 实测通过）**：三态（无 timing / timing 带 null / 只有开始）分列断言：`startMs`/`endMs` 只能是 `null` 或有限数、**不得为 0**；`timingRecorded` 在无 timing 时为 `false`、在有 timing 但字段为 null 时为 `true`；半截记录的 `endMs` 保持 `null` 而不会被兜底成 `startMs`。三个变异（兜底成 0 / 恒 true / endMs 兜底）全部变红
+10. **深链争用（2026-11-13 实测通过）**：先点「加载更早历史」，150~200ms 后立刻粘 `tvp1:e258` —— 最终 57 → 1348 站点、`location.hash` 变 `#tvp1:e258`、详情锚点读数 `tvp1:e258`、无卡死（没有按钮停在正在加载更早）、`data-slot-error` 0
+11. **孤立工具结果（已验）**：构造 `call === null` 的 `ToolResultNode`，确认它有 `orphan-tool` station、计入 `stats.tools` 而非 `steps`、锚点为 `tvp1:e9`；真实会话上另有 5 个孤立站点实测存在
+12. ~~**stale `p` 回收**~~ **（作废：合成 `p` 条目只存在于索引里，索引已取消）**
 13. ~~**宿主 FTS5 能查到当前会话**~~ **（已关闭：FTS5 建不起索引，见 §12.13）**。保留的实测结论：`session_event_search` 在 `targetId` 缺省时确实命中调用方自身历史（`dsh-tool-session-query/lib/index.js:453-454`），只把上界压到当前 step 之前（`:794-798`）——**这条能力存在，但本机规模的索引建不起来**
-14. **索引循环的三个守卫**（仅在回退客户端分页时适用）：resync 递增 `openGeneration` 后旧循环立即 abort；`loadOlder` 静默 return 时能在 2 页内识别无进展并停；达到预算时 UI 明确区分"已到会话开头"与"因预算停止"
+14. ~~**索引循环的三个守卫**~~ **（作废）**。其中无进展即停的等价守卫保留在锚点翻页循环里：`stationsRef.current.length` 未变化且 `loadOlder()` 返回未移动时立即退出
 
 ---
 
