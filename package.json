@@ -1,6 +1,6 @@
 {
   "name": "dsh-trajectory-traceview-plus",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "轨迹视图增强版（Plus）：在「轨迹」标签旁新增可回放的横向时间轴——minimap、窗口内检索（显式标注覆盖边界）、回放、轮次跳转、跟随模式、历史分页、步骤/子调用耗时与吞吐、时钟轴切换、稳定锚点复制与深链、孤立工具结果站点、提示词变更对比、原始请求分析与 Markdown 导出。基于 AFAP/dsh-trajectory-traceview (MIT) 改造。",
   "type": "module",
   "main": "lib/index.js",

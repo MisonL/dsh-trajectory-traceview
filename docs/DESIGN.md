@@ -1250,3 +1250,75 @@ DOM 实测（视口 875 px）：
 #### 视觉这一项的最终状态
 
 从"完全无证据"→"打印布局证据 + 关键矩形实测"。能证明的：结构、文案、单位、颜色、按钮在位，无横向溢出，无遮挡。**不能**证明的：滚动行为、sticky 定位在实时屏幕下的表现、动画与 hover 态——这些打印管线天然拍不到。所以这一项标记为**部分通过**，不再宣称"视觉已验证"。
+
+### 12.25 契约考古：`kind: "unknown"` 被误当成版本漂移（2026-11-13）
+
+这一条来自"要不要放宽 `engines.dsh`"的排查，结论却是一个**功能缺陷**，不是兼容性结论。
+
+#### 怎么发现的
+
+为了判断能否放宽钉版，下载了 `0.2.2-rc.1` 与 `0.2.1-rc.5` 做权威契约比对（不看 bundle，看 `.d.ts`）。逐项结果：
+
+| 契约面 | 结果 |
+|---|---|
+| `contract/request-inspection.d.ts`（`ConversationPromptSnapshot` / `RequestPromptChange`） | **逐字节相同** |
+| `ConvViewOwnerProps`（`conversation.view` 的四个 owner props） | **逐字节相同** |
+| `conversation.view` 插槽定义（`kind`/`scope`/`owner`） | **相同** |
+| `ConversationNode` 联合 | **相同**（11 个成员） |
+| `trajectory-contract.d.ts`（`TrajectorySnapshot`） | **逐字节相同** |
+| `dsh-session-projection/lib/types/types.d.ts` | 纯增量（新增 `SessionProjectionSummaryExcluded` 等类型标记） |
+| `TrajectoryContribution` 的 7 个分支 | **相同** |
+| `layout.d.ts` | 只多一行文档注释 |
+
+比对 `records.d.ts` 的 kind 字面量时看到 `'unknown'`，顺着查到：
+
+```ts
+export interface UnknownSurfaceNode {
+    kind: 'unknown';
+    seq: number;
+    time: number;
+    type: string;   // 原始事件类型
+    data: unknown;  // 原始负载
+}
+```
+
+注释写得很清楚："Known unsupported developer events throw before fallback selection."
+
+#### 缺陷
+
+`UnknownSurfaceNode` 是契约**自己命名的**降级面，含义是"宿主承认这条事件存在、但选择不建模"。我的 `KNOWN_NODE_KINDS` 里没有 `'unknown'`，于是：
+
+1. 它被 `unknownNodeStats` 计入 `unknown` → 头部显示 `⚠ N 条记录无法识别`，暗示版本不兼容；
+2. 它没有任何渲染分支 → 时间轴上**直接消失**；
+3. 更糟：如果一个会话**只有**这类事件，`isEverythingUnknown` 判定"一条都认不出"，整棵树被换成「无法识别当前会话的轨迹数据格式」。
+
+这是纯粹的**冤枉**：宿主明明认得出（它给了 `type` 字符串），是我把它当成了自己看不懂的东西。一个陌生事件让整个视图改口说"格式不认识"，这正是本插件最不该犯的错——比"少显示一个站点"严重得多。
+
+#### 修法
+
+- `KNOWN_NODE_KINDS` 加入 `'unknown'`，并在注释里写明**为什么**它属于已知（契约文档化的降级面），防止以后被"清理"掉
+- fold 阶段为它生成一等站点：`kind: "unknown"`，携带 `eventType`（原始类型）与 `payload`（JSON 预览，`UNKNOWN_PAYLOAD_LIMIT = 2000`）
+- 详情面板显示事件类型 + 原始数据；时间轴卡片用**虚线**左边框和灰色圆点，视觉上区别于其它语义色，读作"未分类"而不是"出错"
+- 时间轴导出、单步复盘包、搜索 haystack 全部带上 `eventType`/`payload`——否则"哪条事件"这个唯一有用的信息就丢了
+- 新增 `safeJsonPreview(value, limit)`：`data` 是 `unknown`，可能含循环引用或 `bigint`，而这是**唯一**一个"必须让读者看到原文"的节点，不能因为序列化失败就抛异常
+
+#### 变异测试（4/4 变红）
+
+| 变异 | 断言反应 |
+|---|---|
+| 从 `KNOWN_NODE_KINDS` 删掉 `'unknown'` | `DRIFT handled kind treated as unknown: unknown` |
+| 把 fold 分支改名成不存在的 kind | `R4 an unknown surface node must produce one station, got 0` |
+| haystack 去掉 `eventType`/`payload` | `R4 the event type must be searchable` |
+| 复盘包不带 payload | `R4 review pack lost the payload` |
+
+#### 顺带确认的兼容性结论
+
+`engines.dsh` **保持钉在 `=0.2.1-rc.5`**，不放宽。理由是纪律而不是谨慎：上面那张表是**类型级**证据，我**没有**在 `0.2.2-rc.1` 上实跑过。`ConvViewOwnerProps` 相同能保证注册面不报错，但保证不了运行时投影行为不变（这次 `dsh-client-ui-conversation` 的 bundle 就多了附件上传生命周期、`FileDrag` 注入、文本交互注册表等改动）。把"类型没变"当作"能用"来放宽钉版，就是这个项目一直在批的那种"没测就声称通过"。
+
+已把 0.2.2 的比对结论写进 README §12，并把"在 0.2.2 上实跑"列为下一步，需要用户同意后才会动其运行时。
+
+#### 硬证据
+
+- 真机（0.2.1-rc.5）：66 站点、`incompat` 0、`data-slot-error` 0、无 raw i18n key、`复制本步复盘`/`复制锚点` 在位
+- 冒烟：`TV PLUGIN SMOKE TEST (v5) OK — turns=4 steps=4 stations=11`
+- 新增断言：`R4`（8 条）+ `DRIFT` 已知类型清单加入 `unknown`

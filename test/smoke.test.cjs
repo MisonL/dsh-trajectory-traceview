@@ -19,12 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview });
 `;
 
-const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
+// WeakSet is a browser global the helper uses for cycle detection; the sandbox
+// has to provide it or the test fails with a ReferenceError instead of a verdict.
+const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -635,7 +637,7 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	const st2 = unknownNodeStats([null, 1, "x", { seq: 1 }, { kind: "" }]);
 	if (st2.invalid !== 5 || st2.unknown !== 0) throw new Error("DRIFT invalid count = " + JSON.stringify(st2));
 	// every kind the projector really handles must be known (guards list rot)
-	for (const k of ["user", "steering", "context", "assistant", "tool-result", "compaction", "turn-error", "model-retry", "turn-max-tokens", "command"]) {
+	for (const k of ["user", "steering", "context", "assistant", "tool-result", "compaction", "turn-error", "model-retry", "turn-max-tokens", "command", "unknown"]) {
 		if (unknownNodeStats([{ kind: k }]).unknown !== 0) throw new Error("DRIFT handled kind treated as unknown: " + k);
 	}
 	// and the tree must carry the diagnostics
@@ -659,6 +661,43 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	// the simulated upgrade: valid contract, zero recognizable nodes -> incompatible
 	if (snapshotContract({ eventNodes: [{ kind: "message.user", seq: 1 }] }).ok !== true) throw new Error("DRIFT renamed kinds still pass the field check (by design)");
 	if (isEverythingUnknown([{ kind: "message.user", seq: 1 }], unknownNodeStats([{ kind: "message.user", seq: 1 }])) !== true) throw new Error("DRIFT a renamed-kind snapshot must be treated as incompatible");
+
+	// ── R4: the contract's OWN fallback surface must not read as drift ───────
+	// `UnknownSurfaceNode` (kind: "unknown") is a documented node kind: it marks one
+	// event the projector intentionally does not model. Treating it as drift blanked
+	// the entire view with "版本不兼容" the moment a session logged one exotic event.
+	if (snapshotContract({ eventNodes: [{ kind: "unknown", seq: 1, time: 1, type: "x", data: {} }] }).ok !== true) throw new Error("R4 an unknown surface node is a valid node shape");
+	if (unknownNodeStats([{ kind: "unknown", seq: 1 }]).unknown !== 0) throw new Error("R4 the documented fallback kind must not count as drift");
+	const uOnly = deriveTraceTree({ eventNodes: [
+		{ kind: "unknown", seq: 3, time: 1000, type: "experimental/widget", data: { mode: "a", n: 2 } }
+	], requests: [], runningCalls: [], partial: null }, t);
+	if (uOnly.stations.length !== 1) throw new Error("R4 an unknown surface node must produce one station, got " + uOnly.stations.length);
+	if (uOnly.stations[0].kind !== "unknown") throw new Error("R4 station kind = " + uOnly.stations[0].kind);
+	if (uOnly.stations[0].eventType !== "experimental/widget") throw new Error("R4 event type lost: " + uOnly.stations[0].eventType);
+	// A session holding ONLY unsupported events is not a broken contract.
+	if (isEverythingUnknown(uOnly.nodes, uOnly.nodeStats) !== false) throw new Error("R4 an unsupported event must not escalate to incompatibility");
+	// The payload must survive into search and into the review pack, or the reader
+	// has no way to say which event it was.
+	if (!uOnly.stations[0].hay.includes("experimental/widget")) throw new Error("R4 the event type must be searchable");
+	if (!uOnly.stations[0].hay.includes("mode")) throw new Error("R4 the payload must be searchable");
+	const uPack = buildStepMarkdown(uOnly.stations[0], [], false, t);
+	if (!uPack.includes("experimental/widget")) throw new Error("R4 review pack lost the event type");
+	if (!uPack.includes('"mode":"a"')) throw new Error("R4 review pack lost the payload");
+	// A payload that cannot be serialized must degrade, never throw.
+	const circular = {};
+	circular.self = circular;
+	const cyc = safeJsonPreview(circular, 200);
+	if (typeof cyc !== "string" || !cyc.includes("[Circular]")) throw new Error("R4 a cyclic payload must degrade to [Circular], got " + cyc);
+	if (safeJsonPreview({ a: 1 }, 3) !== '{"a…') throw new Error("R4 payload cap not applied: " + safeJsonPreview({ a: 1 }, 3));
+	if (safeJsonPreview(undefined, 10) !== undefined && safeJsonPreview(undefined, 10) !== "undefined") throw new Error("R4 an undefined payload must not throw");
+	// And it must sit in its own turn rather than being glued onto an earlier one.
+	const uMixed = deriveTraceTree({ eventNodes: [
+		{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "hi" }] },
+		{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "ok" }] },
+		{ kind: "unknown", seq: 3, time: 3, type: "weird", data: null }
+	], requests: [], runningCalls: [], partial: null }, t);
+	if (uMixed.stations.length !== 3) throw new Error("R4 mixed snapshot station count = " + uMixed.stations.length);
+	if (uMixed.stations[2].kind !== "unknown") throw new Error("R4 unknown station must keep its position");
 
 	// ── R3: projection correctness (found by the third review) ───────────────
 	// (a) a snapshot whose only content is a user message must not be dropped
