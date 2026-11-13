@@ -1433,3 +1433,71 @@ dst: ADAPTER_UNAVAILABLE: This adapter validates DSH 0.2.0-rc.2, …, 0.2.1-rc.5
 - 升级完成，**web / dsh-tui / headless 三个 profile 全部对齐**，启动日志零 `skipping` / `incompatible`
 - 本插件钉到 `=0.2.2-rc.2`，版本 0.8.0
 - 唯一需要人工记住的运维事实：**0.2.2 起 Web 服务要带 `--trusted-host`**，否则浏览器侧静默拿不到脚本
+
+### 12.28 插件逐个体检：谁该升、谁不该升（2026-11-14）
+
+用户要求"各个插件也检查一下适配情况，能升级的都升级一下"。结论是**只有一个插件该升，另一个刻意不升**，并且顺手改掉本插件一处不准确的声明。
+
+#### 体检表
+
+| 插件 | 当前 | 最新 | 处置 | 依据 |
+|---|---|---|---|---|
+| `dsh-trajectory-traceview-plus`（本插件） | 0.8.0 → **0.8.1** | — | 钉版已对齐 + **修 `engines.node`** | 见下文 A |
+| `dsh-union-search` | 0.10.22 | 0.10.22 | 已最新 | `engines.dsh: >=0.1.1-rc.2 <0.3.0`，覆盖 0.2.2 |
+| `dsh-plugin`（TUI） | 2.3.4 → **2.3.9** | 2.3.9 | **已升级** | 见下文 B |
+| `@deepseek-ai/dsh-hook-protocol` / `-hooks-claude-code` | 0.2.2-rc.2 | 0.2.2-rc.3 | **不升** | 见下文 C |
+| `@visual-journal/dsh-plugin` | 0.2.0 | 无上游 | **不升（无版本可升）** | 见下文 D |
+| `@anthropic-ai/claude-agent-sdk`（TUI 可选 peer） | 0.3.287 | 0.3.325 | **刻意不升** | 见下文 E |
+
+#### A. 本插件：`engines.node` 是错的
+
+0.2.2 起 DSH 自己的 `engines` 是 `node: >=24.9.0`（rc.1 和 rc.2 都一样）。而本插件写的是 `node: ">=22"` —— 跟着旧约定抄的。
+
+后果不是"更宽松所以无害"：这是一个**会让使用者装到一半失败**的声明。宿主要求 24.9，插件说 22 就行，两边对不上时插件给出的是错误的期望。已改成 `>=24.9.0`，与本机 `v24.22.1` 和宿主声明一致。
+
+顺带确认：本机 Node 满足 DSH 0.2.2 的 24.9 下限，不需要动运行时。这条**如果当初没搜到上游 release note 就会漏掉**（`npm ls` 不会因为 engines 不匹配而失败）。
+
+#### B. `dsh-plugin` 2.3.4 → 2.3.9：升了，并验证
+
+它是 TUI profile 的插件市场 bundle。新版 manifest 是 `engines.node >=22.6`、peer 只有 `@deepseek-ai/cordis: 4.0.1` 且标记为 `optional`，没有任何 DSH 版本绑定——所以它对 0.2.2 **不构成兼容风险**。
+
+升级后实测：`dsh --profile dsh-tui --dump-config` 退出码 0、零 `skipping/incompatible/denies`；`dsh-tui doctor` 全绿（launcher ↔ profile 对齐 0.20.0）；`cli session list` 仍返回真实会话。
+
+#### C. hook 协议相关的两个包：**不升到 rc.3**
+
+npm 上已经有 `0.2.2-rc.3`，看起来"能升"。但 DSH 本身停在 `0.2.2-rc.2`（`next` 标签是 rc.3，`latest` 还是 rc.1），而 `@deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.2` 的 peer 是**精确钉死的**：
+
+```
+"@deepseek-ai/dsh-agent": "0.2.2-rc.2",
+"@deepseek-ai/dsh-hook-protocol": "0.2.2-rc.2",
+… 七个 @deepseek-ai/dsh-* 全部精确到 0.2.2-rc.2
+```
+
+把 hook 包单独升到 rc.3 就等于让它的 peer 全部失配，而宿主仍跑 rc.2。**这类包必须与宿主同版本走**，所以 `0.2.2-rc.3` 不是"可升级"，是"等宿主升到 rc.3 之后再一起升"。这是本轮唯一一个"看起来该升、实际不能升"的项。
+
+#### D. `@visual-journal/dsh-plugin`：没有上游
+
+它是本地 tarball（`~/.dsh/plugins/visual-journal-dsh-plugin-0.2.0.tgz`），npm 上 `@visual-journal/dsh-plugin`、`dsh-visual-journal`、`visual-journal-dsh-plugin` 三个名字全部 404（用 registry 的 search 也搜不到同名包）。**没有可升级的版本。**
+
+能做的适配核查已做：
+- `engines.dsh: >=0.2.1-rc.5 <0.3.0` —— 覆盖 0.2.2，不会被宿主跳过
+- 启动零拒载，插件面板里正常列出
+- 它的后端是本地 Docker（`http://127.0.0.1:4783`），实测 `/api/agent/capabilities` 返回 200 且带了完整的 `api_version / schema_version / endpoints` 清单
+
+#### E. `@anthropic-ai/claude-agent-sdk`：0.3.287 → 0.3.325 是**降级风险**
+
+它是 dsh-tui 的 `peerDependency`，且在 `peerDependenciesMeta` 里标了 `optional: true`；TUI 自己的 `package.json` 与 README 都把它钉在 **0.3.287**。这是 Anthropic 的独立包，**与 DSH 0.2.2 无关**，只服务 `dsh-tui --backend claude`。
+
+把 peer 升到 TUI 未验证的 0.3.325，是拿一个能用的后端去换一个"没测过"的状态——TUI 没有声明支持 0.3.325，升级就等于单方面违约。**刻意不升。**
+
+#### F. 端到端体检结果（全部通过）
+
+- web profile 配置编排：`--dump-config` 退出码 0，零拒载
+- Web UI：`data-slot-error` 0，三个页签（`对话` / `轨迹` / `轨迹视图`）俱全
+- 插件面板「已安装插件」三项全部列出：`@visual-journal/dsh-plugin`、`dsh-trajectory-traceview-plus`、`dsh-union-search`，界面无「更新」按钮（本机确实都是最新）
+- 搜索插件真跑：`web_search` 返回正常结果（含上游 0.2.2 release note，Node 24.9 那条线索就是从这拿到的）
+- 视觉日志插件后端：`/api/agent/capabilities` 200
+
+#### 结论
+
+升级了 **`dsh-plugin` 2.3.4 → 2.3.9**；修正了本插件 **`engines.node` 的错误声明**；另外两个看起来"该升"的（hooks rc.3、claude-agent-sdk）**有明确理由不升**，理由写在上文而不是默默跳过。
