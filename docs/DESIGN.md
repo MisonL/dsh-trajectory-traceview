@@ -1322,3 +1322,47 @@ export interface UnknownSurfaceNode {
 - 真机（0.2.1-rc.5）：66 站点、`incompat` 0、`data-slot-error` 0、无 raw i18n key、`复制本步复盘`/`复制锚点` 在位
 - 冒烟：`TV PLUGIN SMOKE TEST (v5) OK — turns=4 steps=4 stations=11`
 - 新增断言：`R4`（8 条）+ `DRIFT` 已知类型清单加入 `unknown`
+
+### 12.26 在 0.2.2-rc.1 上实跑的尝试：拿到的证据与拿不到的（2026-11-13）
+
+§12.25 说"没在 0.2.2 上实跑过，所以不放宽钉版"。为了不把"没试"说成"不能试"，做了隔离实跑：独立 `npm install` 前缀 + 独立 `DSH_HOME` + 另一个端口，**完全不碰用户现有运行时**。
+
+#### 第一个发现：钉版是硬闸，不是建议
+
+用 0.2.2 启动时会直接拒绝加载：
+
+```
+dsh: skipping profile bundle "dsh-trajectory-traceview-plus":
+Plugin dsh-trajectory-traceview-plus@0.7.0 is incompatible with dsh 0.2.2-rc.1:
+requirements {"engines.dsh":"=0.2.1-rc.5"}
+```
+
+同一份日志里 `dsh-union-search@0.10.20` 因为 `engines.dsh` 是一长串显式白名单也被跳过了。这说明：**DSH 升级后插件会整体消失**，而不是降级运行。这一点写进 README 的价值高于钉版本身——用户升级后看到的是"这个页签没了"，需要知道原因。
+
+测法是准备一份 `engines.dsh` 改成 `=0.2.2-rc.1` 的副本（`/tmp/tv222test`），链接进隔离 profile。
+
+#### 拿到的证据（真实、可复核）
+
+| 证据 | 内容 |
+|---|---|
+| 宿主主动下发 | `/plugins/??…,@deepseek-ai/dsh-client-ui-trajectory/client.js,dsh-trajectory-traceview-plus/client.js,…` —— 我们的 bundle 在 0.2.2 的插件清单里被打了包 |
+| 模块执行到位 | 页面 158 个 `<style>`，其中含 `.dstv_root` / `.dstv_hDot` → 模块顶层（纯 helper + CSS 注入）在 0.2.2 上跑通了，没有语法/引用错误 |
+| 静态契约 | §12.25 那张表：`ConvViewOwnerProps`、`conversation.view` 插槽、`ConversationNode`、`trajectory-contract.d.ts` 逐字节相同 |
+
+#### 拿不到的证据（诚实记录）
+
+**没能打开一个会话，所以"注册成功 + 真的画出了时间轴"仍未验证。**
+
+隔离环境里没有会话列表：拷贝了 4 个最大的会话日志进隔离 `DSH_HOME`，但 0.2.2 的侧栏按 cwd 分组且自动恢复"上次打开的会话"，恢复一个 208 MB 日志时页面直接卡住（后续 `page.goto` 全部超时，`document.body.innerText` 为空、`style` 数为 0）。换 cwd 重启也一样。另有一个坑：`?token=` 是一次性的，消费后就 303，后续导航拿不到新文档。
+
+#### 结论：钉版不动
+
+`engines.dsh` **保持** `=0.2.1-rc.5`。理由不是"懒得测"，而是**测出来的证据不够**：
+- "bundle 被执行"证明不了 `ctx.slots.inject("conversation.view")` 与 `ctx.locale.register` 在 0.2.2 的运行时下接受同样的调用形态；
+- 更证明不了投影行为一致——这次 `dsh-client-ui-conversation` 的 bundle 就新增了附件上传生命周期、`FileDrag` 注入、文本交互注册表等运行时改动，类型层面完全看不出来。
+
+放宽钉版需要的是"0.2.2 上打开真实会话 → 轨迹视图画出站点 → 66/66 锚点可跳"这一整套，不是"模块没报错"。
+
+#### 隔离实跑的善后
+
+隔离环境共占约 1.4 GB（`/tmp/dsh222` 913 MB / `/tmp/dshhome222` 466 MB / 拷贝实验件），实验后全部删除；测试用插件副本 `/tmp/tv222test` 与两个契约对比包也一并删除。用户的 `~/.dsh` 与 0.2.1 实例未做任何修改（验证：3080 仍在跑，401 正常）。
