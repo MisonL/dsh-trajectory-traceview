@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -523,6 +523,70 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (anchorSeqFloor(floorStations) !== 120) throw new Error("G2 floor must be the smallest anchorSeq");
 	// synthetic / missing seqs must never masquerade as the floor
 	if (anchorSeqFloor([{ anchorSeq: null }, { anchorSeq: 12.5 }, {}]) !== null) throw new Error("G2 floor must ignore non-integer seqs");
+
+	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
+	// Window-edge steps routinely lack stepStartTime / completedTime; the three
+	// states (recorded / partially recorded / not recorded) must stay distinct.
+	const edgeSnap = {
+		eventNodes: [
+			// assistant with NO timing at all
+			{ kind: "assistant", seq: 10, time: 1000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "无 timing" }] },
+			// assistant with a timing block that has nulls inside
+			{ kind: "assistant", seq: 20, time: 2000, turn: 1, step: 2, messageId: "m2", timing: { stepStartTime: null, firstTokenTime: null, completedTime: null }, blocks: [{ kind: "text", text: "全 null" }] },
+			// assistant whose start is recorded but completion is not (still running at the edge)
+			{ kind: "assistant", seq: 30, time: 3000, turn: 1, step: 3, messageId: "m3", timing: { stepStartTime: 2900, firstTokenTime: null, completedTime: null }, blocks: [{ kind: "text", text: "半截" }] }
+		],
+		requests: [], runningCalls: [], partial: null
+	};
+	const edgeTree = deriveTraceTree(edgeSnap, t);
+	const edgeSteps = edgeTree.stations.filter((st) => st.kind === "step");
+	if (edgeSteps.length !== 3) throw new Error("EDGE expected 3 steps, got " + edgeSteps.length);
+	for (const st of edgeSteps) {
+		for (const key of ["startMs", "endMs", "ttftMs"]) {
+			const v = st[key];
+			if (v !== null && !Number.isFinite(v)) throw new Error("EDGE step " + st.stepNo + " " + key + " must be null or finite, got " + v);
+		}
+		// A missing timestamp must never be coerced to 0 (0 is a legitimate epoch value).
+		if (st.startMs === 0) throw new Error("EDGE step " + st.stepNo + " startMs must not be 0");
+		if (st.endMs === 0) throw new Error("EDGE step " + st.stepNo + " endMs must not be 0");
+	}
+	// three distinct provenance states
+	const noTiming = edgeSteps.find((st) => st.stepNo === 1);
+	const nullTiming = edgeSteps.find((st) => st.stepNo === 2);
+	const halfTiming = edgeSteps.find((st) => st.stepNo === 3);
+	if (noTiming.timingRecorded !== false) throw new Error("EDGE absent timing must report timingRecorded=false");
+	if (noTiming.startMs !== null || noTiming.endMs !== null) throw new Error("EDGE absent timing must stay null");
+	if (nullTiming.timingRecorded !== true) throw new Error("EDGE a present-but-null timing block still counts as recorded");
+	if (halfTiming.startMs !== 2900) throw new Error("EDGE half timing must keep the recorded start, got " + halfTiming.startMs);
+	if (halfTiming.endMs !== null) throw new Error("EDGE half timing must leave endMs null, got " + halfTiming.endMs);
+
+	// ── §8.7 降级：a malformed snapshot must degrade, never crash the view ───
+	// The snapshot comes from another plugin, so every field is untrusted.
+	if (safeList(null).length !== 0 || safeList("nope").length !== 0 || safeList({}).length !== 0) throw new Error("DEG safeList must reject non-arrays");
+	if (safeList([null, undefined, 1, "x", true]).length !== 0) throw new Error("DEG safeList must drop non-object entries");
+	if (safeList([{ a: 1 }, null, { b: 2 }]).length !== 2) throw new Error("DEG safeList must keep objects");
+	const malformed = [
+		null, undefined, {}, [],
+		{ eventNodes: "nope" },
+		{ eventNodes: [null, undefined, 1] },
+		{ requests: {} },
+		{ requests: "nope" },
+		{ runningCalls: {} },
+		{ runningCalls: 0 },
+		{ callSchemas: 1 },
+		{ partial: "x" },
+		{ eventNodes: "x", requests: "y", runningCalls: 0, partial: "z", callSchemas: 1 }
+	];
+	for (let i = 0; i < malformed.length; i += 1) {
+		let out;
+		try {
+			out = deriveTraceTree(malformed[i], t);
+		} catch (error) {
+			throw new Error("DEG deriveTraceTree threw on case #" + i + " (" + JSON.stringify(malformed[i]) + "): " + error.message);
+		}
+		if (out === null || !Array.isArray(out.stations)) throw new Error("DEG case #" + i + " must still return a tree with stations[]");
+		if (out.stations.length !== 0) throw new Error("DEG case #" + i + " must yield no stations");
+	}
 
 	// ── G2: landing on an anchor must become a shareable URL ─────────────────
 	// The decision is an explicit flag, never "did the string change" — strings are
