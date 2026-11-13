@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -593,6 +593,54 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	}
 	// a null station must not throw (defensive: panel can render before selection settles)
 	if (buildStepMarkdown(null, [], false, t) !== "") throw new Error("STEP null station must yield empty string");
+
+	// ── Q3: contract drift must be reported, never silently rendered as empty ─
+	const okContract = snapshotContract({ eventNodes: [{ kind: "user", seq: 1 }] });
+	if (okContract.ok !== true) throw new Error("DRIFT a well-formed snapshot must pass: " + JSON.stringify(okContract.problems));
+	// a real snapshot with no events yet is NOT a contract violation
+	if (snapshotContract({ eventNodes: [] }).ok !== true) throw new Error("DRIFT an empty-but-valid snapshot must pass");
+	for (const bad of [null, undefined, {}, { eventNodes: "nope" }, { requests: [] }]) {
+		const r = snapshotContract(bad);
+		if (r.ok !== false) throw new Error("DRIFT must flag " + JSON.stringify(bad));
+		if (!Array.isArray(r.problems) || r.problems.length === 0) throw new Error("DRIFT must name the problem for " + JSON.stringify(bad));
+	}
+	// shape problems keep the distinct token so the UI can explain the actual cause
+	if (!snapshotContract({ eventNodes: [{ kind: "user", seq: NaN }] }).problems.includes("bad-node-shape")) throw new Error("DRIFT must flag a bad seq");
+	if (!snapshotContract({ eventNodes: [{ seq: 1 }] }).problems.includes("bad-node-shape")) throw new Error("DRIFT must flag a missing kind");
+	// fractional seq is legal (official synthetic nodes)
+	if (snapshotContract({ eventNodes: [{ kind: "assistant", seq: 2.5 }] }).ok !== true) throw new Error("DRIFT fractional seq must be accepted");
+
+	// unknown kinds must be COUNTED, not dropped silently
+	const st1 = unknownNodeStats([{ kind: "user" }, { kind: "message" }, { kind: "assistant-step" }]);
+	if (st1.unknown !== 2) throw new Error("DRIFT unknown count = " + st1.unknown);
+	if (st1.kinds.length !== 2) throw new Error("DRIFT must list the unfamiliar kinds, got " + JSON.stringify(st1.kinds));
+	const st2 = unknownNodeStats([null, 1, "x", { seq: 1 }, { kind: "" }]);
+	if (st2.invalid !== 5 || st2.unknown !== 0) throw new Error("DRIFT invalid count = " + JSON.stringify(st2));
+	// every kind the projector really handles must be known (guards list rot)
+	for (const k of ["user", "steering", "context", "assistant", "tool-result", "compaction", "turn-error", "model-retry", "turn-max-tokens", "command"]) {
+		if (unknownNodeStats([{ kind: k }]).unknown !== 0) throw new Error("DRIFT handled kind treated as unknown: " + k);
+	}
+	// and the tree must carry the diagnostics
+	const driftTree = deriveTraceTree({ eventNodes: [{ kind: "user", seq: 1 }], requests: [], runningCalls: [], partial: null }, t);
+	if (driftTree.nodeStats === undefined || driftTree.contract === undefined) throw new Error("DRIFT tree must expose contract + nodeStats");
+	const unknownTree = deriveTraceTree({ eventNodes: [
+		{ kind: "assistant", seq: 5, time: 5, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "ok" }] },
+		{ kind: "message", seq: 6, time: 6 },
+		{ kind: "assistant-step", seq: 7, time: 7 }
+	], requests: [], runningCalls: [], partial: null }, t);
+	if (unknownTree.stations.length === 0) throw new Error("DRIFT the recognized node must still render");
+	if (unknownTree.nodeStats.unknown !== 2) throw new Error("DRIFT the 2 unknown nodes must be counted alongside a rendered station, got " + unknownTree.nodeStats.unknown);
+
+	// A kind rename keeps every field valid, so the contract check alone passes —
+	// "everything unrecognized" must independently escalate to incompatibility.
+	if (isEverythingUnknown([{ kind: "a" }, { kind: "b" }], { unknown: 2, invalid: 0 }) !== true) throw new Error("DRIFT all-unknown must escalate");
+	if (isEverythingUnknown([{ kind: "user" }], { unknown: 0, invalid: 0 }) !== false) throw new Error("DRIFT a recognized node must not escalate");
+	if (isEverythingUnknown([{ kind: "user" }, { kind: "x" }], { unknown: 1, invalid: 0 }) !== false) throw new Error("DRIFT a partial loss must not escalate");
+	if (isEverythingUnknown([], { unknown: 0, invalid: 0 }) !== false) throw new Error("DRIFT an empty snapshot is not incompatibility");
+	if (isEverythingUnknown(undefined, undefined) !== false) throw new Error("DRIFT missing args must not escalate");
+	// the simulated upgrade: valid contract, zero recognizable nodes -> incompatible
+	if (snapshotContract({ eventNodes: [{ kind: "message.user", seq: 1 }] }).ok !== true) throw new Error("DRIFT renamed kinds still pass the field check (by design)");
+	if (isEverythingUnknown([{ kind: "message.user", seq: 1 }], unknownNodeStats([{ kind: "message.user", seq: 1 }])) !== true) throw new Error("DRIFT a renamed-kind snapshot must be treated as incompatible");
 
 	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
 	// Window-edge steps routinely lack stepStartTime / completedTime; the three
