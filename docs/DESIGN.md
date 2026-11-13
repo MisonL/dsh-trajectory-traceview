@@ -936,3 +936,46 @@ D2 从"全史检索"降级为"已加载窗口内检索"后，代码上的实际�
 #### 仍然没有证据的一项
 
 **视觉观感。** `Page.captureScreenshot` 在 1300+ 站点、1600+ `dstv_` 节点的 DOM 下稳定超时，至今拿不到一张图。功能正确性有测量值和断言支撑，**但"好不好看"我无法作证**。
+
+### 12.18 M3 可行性探测：fork 可做，但比原估计贵（2026-11-13）
+
+设计里对 M3 的原判断是"fork 比原先估计便宜——客户端 `ctx.sessions.fork({sessionId, atSeq})` 已存在，Chat 侧还有官方 `forkAt(seq)` 可参照"。**探测结果：一半对一半错。**
+
+#### 探到的三件事
+
+1. **`ChatView` 的 `forkAt` 不是 owner prop 继承来的。** `conversation.view` 的 owner props 至今仍只有四个（`dsh-client-ui-conversation/lib/client.js:18035-18041`：`inspectCall` / `viewRequest` / `openView` / `completeViewRequest`），**没有 `forkAt`**。官方 Chat 是自己在 `inject(sessionId)` 里造的（`dsh-client-ui-chat/lib/client.js:13300-13314`）：
+
+   ```js
+   forkAt: (seq) => {
+     ctx.sessions.fork({ sessionId, atSeq: seq, increaseTitle: true, onCreated: ... })
+       .then((childId) => { ctx.uiWorkspace.openSession(childId); })
+   }
+   ```
+
+   所以"有 `forkAt` 可参照"实际意思是"有**写法**可参照"，不是"这个能力现成能拿到"。
+
+2. **`ctx.uiWorkspace` 未在 `inject` 声明里会直接抛错。** 首次探测报 `cannot get property "uiWorkspace" without inject`——本插件的 `inject = ["slots","locale","sessions"]` 里没有它，运行时硬失败，不是返回 `undefined`。要开 M3 必须同步改 `inject`。
+
+3. **补齐声明后全部可用**：`hasFork: true`、`hasUiWorkspace: true`（`openSession` 为函数）、`hasSessionController: true`、`sessionId` 为 string。
+
+#### 成本重估
+
+| 项 | 原估计 | 实测后 |
+|---|---|---|
+| 拿到 fork 能力 | "已存在，可直接用" | 需在 `inject` 加 `uiWorkspace`，并在 `inject` 里照样手写 `forkAt`（约 10 行） |
+| UI 入口 | 未评估 | 站点详情里加"从此步分叉"按钮 + 二次确认（fork 会产生新会话，不可撤销） |
+| 边界 | 未评估 | `atSeq` 必须是**存在的 durable seq**；合成站点（`p` 锚点）不能 fork；分叉后要能切换/提示到子会话 |
+
+**结论**：M3 不是"几乎白捡"，但也确实不贵——核心能力都在，主要工作在 UI 与边界处理。**探针已全部移除，工作区干净**（`git status` 无改动，页面 `window.__m3probe` 为 absent，60 站点正常渲染）。
+
+#### 顺带确认：截图通道彻底不可用
+
+本轮又试了三条路，全部失败：
+
+| 尝试 | 结果 |
+|---|---|
+| `page.screenshot()` 全页 | `CDP request timed out` |
+| `page.cdp('Page.captureScreenshot')` 原样调用（jpeg/低质量/`optimizeForSpeed`） | 同样超时 |
+| 先 `Emulation.setDeviceMetricsOverride` 缩到 420×300 再截 | 同样超时 |
+
+也就是说超时与**视口大小、编码、DOM 规模都无关**，是这个 CDP 通道本身不可用。`page.snapshot()` 只返回可访问性树（890 字符），不含视觉信息。**视觉观感这一项，我不会再声称能验证。**
