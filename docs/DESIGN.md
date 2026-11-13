@@ -162,7 +162,7 @@
 **顺带落出两条运维事实**（都实测过）：
 
 - 8 个 `version: 0` 遗留会话在 converter 里先抛 `subagent/descriptor ... unsupported descriptor version 2`，而 `_reconcile` 的 all-or-nothing 让**一条坏日志拖垮全部检索**
-- 这 8 个目录还以"扁平日志"形式直接放在 `~/.dsh/sessions/` 根下，会让 `listSessionDirs` 抛 `uses the unsupported flat-file layout`（`dsh-session-persistence-jsonl/lib/index.js:3523-3536`），**连带 5 个插件不激活**（workspace / session-controller / schedule / workspace-controller / ui-deliverables）。已移到 `~/.dsh/sessions-archive-v0/`，启动恢复单行、无告警
+- 这 8 个目录还以"扁平日志"形式直接放在 `~/.dsh/sessions/` 根下，会让 `listSessionDirs` 抛 `uses the unsupported flat-file layout`（`dsh-session-persistence-jsonl/lib/index.js:3523-3536`），**连带 5 个插件不激活**（workspace / session-controller / schedule / workspace-controller / ui-deliverables）。移出根目录后启动恢复单行、无告警；这 8 个会话内容确认不需要，**已于 2026-11-13 经用户确认删除**
 
 #### v1 定稿：不做全史检索
 
@@ -850,7 +850,7 @@ D2 从"全史检索"降级为"已加载窗口内检索"后，代码上的实际�
 
 **1. profile 配置瘦身**：D2 那段 10 行长注释压成 4 行，保留"不要再试"的结论与文档指针（`~/.dsh/profiles/web/cordis.patch.yml`，3826 B）。401 修复的 `llm-deepseek` / `llm-deepseek-account` 禁用块原样保留。
 
-**2. 归档目录加说明，不删数据**：8 个旧会话移到 `~/.dsh/sessions-archive-v0/`（1.8 MB）并写入 `README.md`，记录三件事——为什么必须移出（扁平布局会让 5 个插件不激活）、为什么加载不了（descriptor v2）、以及**想恢复时必须同时做**"放进 project 目录改成 `session-<uuid>`"和"格式升到 v3"。**没有删除任何会话文件**：这是用户数据，决定权不在我。
+**2. 旧会话暂存后删除**：8 个旧会话先移到 `~/.dsh/sessions-archive-v0/`（1.8 MB）并写 `README.md` 说明为什么必须移出（扁平布局会让 5 个插件不激活）、为什么加载不了（descriptor v2）、以及恢复步骤。当时**没有直接删**——这是用户数据，决定权不在我。2026-11-13 用户确认内容不需要，已连同暂存目录一并删除。
 
 **3. D5 身份改造落地**（见 D5）：包名 / patch id / 客户端模块 id / 样式标签 id / `dataset.plugin` / view id / order / `engines` / 仓库地址，共 9 处，加 README 中英各 8 处、测试头部 1 处。`version` 从 0.3.0 提到 0.4.0——功能集已明显超出上游。
 
