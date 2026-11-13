@@ -19,12 +19,12 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown });
 `;
 
 const sandbox = { console, JSON, Set, Map, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -523,6 +523,76 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (anchorSeqFloor(floorStations) !== 120) throw new Error("G2 floor must be the smallest anchorSeq");
 	// synthetic / missing seqs must never masquerade as the floor
 	if (anchorSeqFloor([{ anchorSeq: null }, { anchorSeq: 12.5 }, {}]) !== null) throw new Error("G2 floor must ignore non-integer seqs");
+
+	// ── Q2-1: the prompt diff must show WHAT changed, not just how many chars ─
+	const base = "line1\nline2\nline3\nline4\nline5";
+	// one edited line in the middle: prefix/suffix trimming must isolate it
+	const d1 = promptTextDiff(base, "line1\nline2\nCHANGED\nline4\nline5", 40);
+	if (d1 === null) throw new Error("DIFF expected a diff for a changed middle line");
+	if (d1.removed.length !== 1 || d1.removed[0] !== "line3") throw new Error("DIFF removed = " + JSON.stringify(d1.removed));
+	if (d1.added.length !== 1 || d1.added[0] !== "CHANGED") throw new Error("DIFF added = " + JSON.stringify(d1.added));
+	if (d1.startLine !== 3) throw new Error("DIFF startLine = " + d1.startLine);
+	if (d1.narrows !== false) throw new Error("DIFF must not report truncation for a small diff");
+	// identical text -> no diff at all (must not render an empty block)
+	if (promptTextDiff(base, base, 40) !== null) throw new Error("DIFF identical text must yield null");
+	// both empty -> null
+	if (promptTextDiff("", "", 40) !== null) throw new Error("DIFF two empty prompts must yield null");
+	// pure addition (tool appended at the end)
+	const d2 = promptTextDiff("a\nb", "a\nb\nc", 40);
+	if (d2.removedCount !== 0 || d2.addedCount !== 1 || d2.added[0] !== "c") throw new Error("DIFF append case wrong");
+	// cap must truncate and say so
+	const longPrev = Array.from({ length: 100 }, (_, i) => "old" + i).join("\n");
+	const longCur = Array.from({ length: 100 }, (_, i) => "new" + i).join("\n");
+	const d3 = promptTextDiff(longPrev, longCur, 10);
+	if (d3.removed.length !== 10 || d3.added.length !== 10) throw new Error("DIFF cap not applied");
+	if (d3.narrows !== true) throw new Error("DIFF must flag truncation");
+
+	// tool schemas that keep the same name but change description must be reported
+	const toolsBefore = [{ name: "bash", description: "run a command" }, { name: "grep", description: "x" }];
+	const toolsAfter = [{ name: "bash", description: "run a command SAFELY" }, { name: "grep", description: "x" }];
+	const changed = changedTools(toolsBefore, toolsAfter);
+	if (changed.length !== 1 || changed[0] !== "bash") throw new Error("DIFF changedTools = " + JSON.stringify(changed));
+	if (changedTools(toolsBefore, toolsBefore).length !== 0) throw new Error("DIFF identical catalogs must report nothing");
+	// a pure rename is add/remove, not a silent "changed"
+	if (changedTools([{ name: "a" }], [{ name: "b" }]).length !== 0) throw new Error("DIFF rename must not be reported as changed");
+	if (changedTools(undefined, undefined).length !== 0) throw new Error("DIFF must tolerate missing catalogs");
+
+	// ── Q2-2: every panel part must declare whether it is verbatim or inferred ─
+	const evFull = evidenceOf({ prompt: { system: "x" } }, [{ role: "user" }], false);
+	if (evFull.length !== 2) throw new Error("EV expected prompt+messages, got " + JSON.stringify(evFull));
+	if (evFull[0].id !== "prompt" || evFull[0].level !== "exact") throw new Error("EV the prompt header must be exact");
+	if (evFull[1].id !== "messages" || evFull[1].level !== "reconstructed") throw new Error("EV the message list must be reconstructed");
+	// unloaded history must add an explicit "partial" marker, never be silent
+	const evPartial = evidenceOf({ prompt: { system: "x" } }, [{ role: "user" }], true);
+	if (!evPartial.some((e) => e.id === "range" && e.level === "partial")) throw new Error("EV hasMore must surface a partial marker");
+	// nothing to declare -> no chips (must not render an empty row)
+	if (evidenceOf(null, [], false).length !== 0) throw new Error("EV empty request must produce no chips");
+	if (evidenceOf({ prompt: null }, [], false).length !== 0) throw new Error("EV missing prompt must produce no chips");
+
+	// ── Q2-3: single-step review pack must carry everything needed to reason ──
+	const stepStation = tree.stations.find((st) => st.kind === "step");
+	if (stepStation === void 0) throw new Error("STEP expected a step station in the fixture");
+	const pack = buildStepMarkdown(stepStation, msgs1, false, t);
+	if (typeof pack !== "string" || pack === "") throw new Error("STEP pack must not be empty");
+	if (!pack.includes("export.stepTitle")) throw new Error("STEP pack must carry a title");
+	// every pack must carry its anchor so the reader can jump back
+	const stepAnchor = anchorOf(stepStation);
+	if (stepAnchor !== null && !pack.includes(stepAnchor)) throw new Error("STEP pack must embed its anchor, missing " + stepAnchor);
+	// evidence levels must be stated, not implied
+	if (!pack.includes("evidence.exact")) throw new Error("STEP pack must declare the recorded parts");
+	if (!pack.includes("evidence.reconstructed")) throw new Error("STEP pack must declare the reconstructed parts");
+	// unloaded history must surface as an explicit caveat, not be silently omitted
+	const partialPack = buildStepMarkdown(stepStation, msgs1, true, t);
+	if (!partialPack.includes("evidence.partial")) throw new Error("STEP pack must warn when history is unloaded");
+	// tool results belong in the pack
+	// Assert the tool RESULT itself is embedded — a bare ``` check passes on any
+	// fenced block (args are fenced too), so it cannot catch a dropped result.
+	const packTool = stepStation.cells.find((c) => c.kind === "tool" && c.resultText);
+	if (packTool !== void 0 && !pack.includes(String(packTool.resultText).slice(0, 40))) {
+		throw new Error("STEP pack must embed the tool result text, got: " + pack.slice(0, 200));
+	}
+	// a null station must not throw (defensive: panel can render before selection settles)
+	if (buildStepMarkdown(null, [], false, t) !== "") throw new Error("STEP null station must yield empty string");
 
 	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
 	// Window-edge steps routinely lack stepStartTime / completedTime; the three
