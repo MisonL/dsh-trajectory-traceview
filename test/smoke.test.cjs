@@ -915,7 +915,7 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 
 		if (!/role: "listbox"/.test(src)) throw new Error("A1 the timeline must expose listbox semantics");
 		if (!/role: "option"/.test(src)) throw new Error("A1 each station must be an option");
-		if (!/aria-selected/.test(src)) throw new Error("A1 the selected station must be announced");
+		if (!/"aria-selected": revealed === null \? undefined/.test(src)) throw new Error("A1 aria-selected must be omitted in overview and set once a station is selected");
 		if (!/stationAriaLabel\(s, i \+ 1, N, t\)/.test(src)) throw new Error("A1 stations need an accessible name");
 		if (!/tabIndex: isActive \|\| \(revealed === null && i === 0\) \? 0 : -1/.test(src)) throw new Error("A1 roving tabindex must keep exactly one station tabbable");
 		if (!/stationOnKeyDown\(ev, i\)/.test(src)) throw new Error("A1 stations must handle arrow keys");
