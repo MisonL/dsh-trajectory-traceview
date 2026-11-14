@@ -112,7 +112,8 @@ if (step1.ttftMs !== 200) throw new Error("step1 ttft (2100-1900): " + step1.ttf
 if (step1.decodeRate == null || Math.abs(step1.decodeRate - 45 / 1.3) > 0.01) throw new Error("step1 decode rate: " + step1.decodeRate);
 if (step1.turn !== 1) throw new Error("step1 turn: " + step1.turn);
 if (step1.interrupted !== false) throw new Error("step1 should not be interrupted");
-if (typeof step1.hay !== "string" || !step1.hay.includes("pwsh")) throw new Error("step1 hay should include tool name");
+if (matchStations([step1], "pwsh").length !== 1) throw new Error("search must find a step by its tool name");
+if (matchStations([step1], "PWSh").length !== 1) throw new Error("search must be case-insensitive");
 
 // request extras: thinking/stop config visible, startSeq kept for lazy rebuild, no eager messages.
 if (step1.request.config.thinking !== "enabled") throw new Error("thinking config missing");
@@ -175,7 +176,7 @@ if (!step2.meta.includes("chip.interrupted")) throw new Error("step2 interrupted
 const readTool = step2.cells.find((c) => c.name === "read");
 if (!readTool || readTool.isError !== true) throw new Error("read tool error flag");
 if (readTool.errorName !== "ENOENT") throw new Error("errorName: " + readTool.errorName);
-if (!readTool.hay !== false && !step2.hay.includes("enoent")) throw new Error("step2 hay should include error name");
+if (matchStations([step2], "enoent").length !== 1) throw new Error("search must find a step by its error name");
 if (step2.request === null || step2.request.status !== "error") throw new Error("step2 request status");
 if (step2.request.retry !== 1 || step2.request.maxRetries !== 3) throw new Error("step2 retry info");
 const errStation = tree.stations.find((s) => s.kind === "error");
@@ -678,8 +679,8 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (isEverythingUnknown(uOnly.nodes, uOnly.nodeStats) !== false) throw new Error("R4 an unsupported event must not escalate to incompatibility");
 	// The payload must survive into search and into the review pack, or the reader
 	// has no way to say which event it was.
-	if (!uOnly.stations[0].hay.includes("experimental/widget")) throw new Error("R4 the event type must be searchable");
-	if (!uOnly.stations[0].hay.includes("mode")) throw new Error("R4 the payload must be searchable");
+	if (matchStations(uOnly.stations, "experimental/widget").length !== 1) throw new Error("R4 the event type must be searchable");
+	if (matchStations(uOnly.stations, "mode").length !== 1) throw new Error("R4 the payload must be searchable");
 	const uPack = buildStepMarkdown(uOnly.stations[0], [], false, t);
 	if (!uPack.includes("experimental/widget")) throw new Error("R4 review pack lost the event type");
 	if (!uPack.includes('"mode":"a"')) throw new Error("R4 review pack lost the payload");
@@ -858,6 +859,64 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 		if (out === null || !Array.isArray(out.stations)) throw new Error("DEG case #" + i + " must still return a tree with stations[]");
 		if (out.stations.length !== 0) throw new Error("DEG case #" + i + " must yield no stations");
+	}
+
+	// ── P1: projection cost guard (streaming must stay inside a frame budget) ──
+	// The snapshot changes on every streamed token, so a slow fold becomes a stutter.
+	// This is a TRIPWIRE, not a fine-grained performance test: inside the sandboxed
+	// VM the same fold measures ~150–190 ms, while an eager-haystack build of the
+	// same fixture measured ~214–265 ms — the two ranges overlap, so the timing alone
+	// cannot separate them. The laziness assertions below are what actually pin the
+	// haystack behaviour; the budget only catches a gross blow-up (accidental O(n²)).
+	// Measured standalone (no VM, warm JIT): 3,200 stations ≈ 42 ms, 6,400 ≈ 66 ms.
+	{
+		const big = [];
+		let s0 = 1;
+		for (let turn = 1; turn <= 200; turn += 1) {
+			big.push({ kind: "user", seq: s0++, time: 1000 * s0, turn, content: [{ type: "text", text: "q" + turn }] });
+			for (let step = 1; step <= 15; step += 1) {
+				big.push({ kind: "assistant", seq: s0++, time: 1000 * s0, turn, step, blocks: [
+					{ kind: "text", text: "x".repeat(200) },
+					{ kind: "tool-call", callId: "c" + s0, name: "read", argsRaw: "{}" }
+				] });
+				big.push({ kind: "tool-result", seq: s0++, time: 1000 * s0, callId: "c" + (s0 - 1), call: { name: "read", argsRaw: "{}" }, content: [{ type: "text", text: "y".repeat(2000) }], isError: false, subCalls: [] });
+			}
+		}
+		const bigSnap = { eventNodes: big, requests: [], callSchemas: new Map(), runningCalls: [], partial: null };
+		deriveTraceTree(bigSnap, t); // warm up the JIT so the assertion measures steady state
+		const samples = [];
+		for (let i = 0; i < 7; i += 1) {
+			const built = process.hrtime.bigint();
+			deriveTraceTree(bigSnap, t);
+			samples.push(Number(process.hrtime.bigint() - built) / 1e6);
+		}
+		samples.sort((a, b) => a - b);
+		const median = samples[3];
+		if (median > 250) throw new Error("P1 projection of " + big.length + " nodes took " + median.toFixed(1) + " ms median (budget 250 ms)");
+		// The fold must not pre-materialize search text: that is what made it slow.
+		const probe = deriveTraceTree({ eventNodes: [
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "findme" }] }
+		], requests: [], runningCalls: [], partial: null }, t);
+		if (probe.stations[0].hay !== undefined) throw new Error("P1 the haystack must stay lazy until something searches");
+		if (matchStations(probe.stations, "findme").length !== 1) throw new Error("P1 the lazy haystack must still match");
+		if (probe.stations[0].hay === undefined) throw new Error("P1 searching must cache the haystack on the station");
+	}
+
+	// ── P2: render isolation must stay wired ─────────────────────────────────
+	// A read-only review tool must not blank out because ONE station had an
+	// unexpected shape. That guarantee lives in three specific wirings; a refactor
+	// that silently drops one of them is invisible until the day it is needed, so
+	// the shape is asserted here rather than left to review.
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/class RenderBoundary extends/.test(src)) throw new Error("P2 a render boundary class must exist");
+		if (!/static getDerivedStateFromError/.test(src)) throw new Error("P2 the boundary must catch derived errors");
+		// `render` must be CALLED inside the boundary; an eager element would throw in
+		// the parent render where no boundary can see it.
+		if (!/render:\s*\(\)\s*=>\s*renderStationCard\(/.test(src)) throw new Error("P2 station cards must be built inside the boundary");
+		if (!/render:\s*\(\)\s*=>\s*\(showTab === "request"[\s\S]{0,200}?renderDetailBody\(/.test(src)) throw new Error("P2 the detail panel must be built inside the boundary");
+		if (/,\s*TraceMapView\)\)/.test(src)) throw new Error("P2 the view must be registered through the boundary, not bare");
+		if (!/,\s*SafeTraceMapView\)\)/.test(src)) throw new Error("P2 the view must be registered through SafeTraceMapView");
 	}
 
 	// ── G2: landing on an anchor must become a shareable URL ─────────────────
