@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -859,6 +859,72 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 		if (out === null || !Array.isArray(out.stations)) throw new Error("DEG case #" + i + " must still return a tree with stations[]");
 		if (out.stations.length !== 0) throw new Error("DEG case #" + i + " must yield no stations");
+	}
+
+	// ── A1: accessibility — colour, motion, semantics ─────────────────────────
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+
+		// Contrast is arithmetic, so assert it as arithmetic: every status colour on
+		// both palettes must clear WCAG AA (4.5:1) against its own surface.
+		const lum = (hex) => {
+			const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+				.map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+			return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+		};
+		const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+		// The palette is emitted as adjacent string literals, so read it per declaration
+		// rather than assuming one CSS rule lives on one source line.
+		const readPalette = (re) => {
+			const out = {};
+			for (const m of src.matchAll(re)) out[m[1]] = m[2];
+			return out;
+		};
+		const dark = readPalette(/\.dstv_root\{--dstv-ok:(#[0-9a-fA-F]{6})[^}]*?--dstv-muted:(#[0-9a-fA-F]{6})\}/g);
+		const light = readPalette(/body:not\(\[data-ds-dark-theme\]\) \.dstv_root\{--dstv-ok:(#[0-9a-fA-F]{6})[^}]*?--dstv-muted:(#[0-9a-fA-F]{6})\}/g);
+		const vars = (css) => [...css.matchAll(/--(dstv-[a-z]+):(#[0-9a-fA-F]{6})/g)].map((m) => [m[1], m[2]]);
+		const allVars = [...src.matchAll(/--(dstv-[a-z]+):(#[0-9a-fA-F]{6})/g)].map((m) => m[1]);
+		if (!allVars.includes("dstv-ok") || !allVars.includes("dstv-muted")) throw new Error("A1 palettes look truncated");
+		// Every declaration belongs to exactly one of the two palettes; check the value
+		// against the surface of whichever theme declared it.
+		const DARK_SURFACE = "#0e1116", LIGHT_SURFACE = "#ffffff";
+		const lightStart = src.indexOf("body:not([data-ds-dark-theme]) .dstv_root{--dstv-ok:");
+		if (lightStart < 0) throw new Error("A1 the light palette must be declared");
+		const paletteSlice = src.slice(0, lightStart);
+		const lightSlice = src.slice(lightStart, lightStart + 900);
+		for (const [name, hex] of vars(paletteSlice)) {
+			if (!name.startsWith("dstv-")) continue;
+			if (ratio(hex, DARK_SURFACE) < 4.5) throw new Error("A1 dark " + name + " " + hex + " is " + ratio(hex, DARK_SURFACE).toFixed(2) + ":1 (need 4.5)");
+		}
+		for (const [name, hex] of vars(lightSlice)) {
+			if (ratio(hex, LIGHT_SURFACE) < 4.5) throw new Error("A1 light " + name + " " + hex + " is " + ratio(hex, LIGHT_SURFACE).toFixed(2) + ":1 (need 4.5)");
+		}
+		if (vars(lightSlice).length < 6) throw new Error("A1 the light palette must define every role it uses");
+		// The palette must be USED: a hardcoded hex added later silently escapes the
+		// theme, which is exactly how the 1.7:1 light-mode chips happened.
+		// Strip the palette declarations themselves, then any hex left is a colour that
+		// bypasses the theme.
+		const paletteDefs = new Set([...src.matchAll(/--(?:dstv-[a-z]+):(#[0-9a-fA-F]{6})/g)].map((m) => m[1].toLowerCase()));
+		const strayHex = (src.match(/#[0-9a-fA-F]{6}\b/g) || []).map((h) => h.toLowerCase()).filter((h) => !paletteDefs.has(h));
+		if (strayHex.length > 0) throw new Error("A1 colours must go through vars, found: " + [...new Set(strayHex)].join(" "));
+		if (paletteDefs.size < 12) throw new Error("A1 expected both palettes to declare the full role set");
+
+		if (!/@media \(prefers-reduced-motion: reduce\)/.test(src)) throw new Error("A1 CSS must honour reduced motion");
+		if (!/reduceMotion\(\)/.test(src)) throw new Error("A1 smooth programmatic scrolling must honour reduced motion too");
+		if (!/matchMedia\("\(prefers-reduced-motion: reduce\)"\)\.matches/.test(src)) throw new Error("A1 the reduced-motion query must be evaluated in JS");
+
+		if (!/role: "listbox"/.test(src)) throw new Error("A1 the timeline must expose listbox semantics");
+		if (!/role: "option"/.test(src)) throw new Error("A1 each station must be an option");
+		if (!/aria-selected/.test(src)) throw new Error("A1 the selected station must be announced");
+		if (!/stationAriaLabel\(s, i \+ 1, N, t\)/.test(src)) throw new Error("A1 stations need an accessible name");
+		if (!/tabIndex: isActive \|\| \(revealed === null && i === 0\) \? 0 : -1/.test(src)) throw new Error("A1 roving tabindex must keep exactly one station tabbable");
+		if (!/stationOnKeyDown\(ev, i\)/.test(src)) throw new Error("A1 stations must handle arrow keys");
+
+		// And the label builder itself has to produce something usable.
+		const label = stationAriaLabel({ kind: "step", stepNo: 3, turn: 2, meta: ["4工具"], hasError: false }, 7, 66, t);
+		if (!label.includes("7 / 66") || !label.includes("3")) throw new Error("A1 aria label must carry position and identity, got: " + label);
+		const errLabel = stationAriaLabel({ kind: "step", stepNo: 1, turn: 1, meta: [], hasError: true }, 1, 2, t);
+		if (!errLabel.includes(t("meta.error"))) throw new Error("A1 aria label must announce errors");
 	}
 
 	// ── P1: projection cost guard (streaming must stay inside a frame budget) ──
