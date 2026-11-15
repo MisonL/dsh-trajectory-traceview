@@ -861,6 +861,30 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (out.stations.length !== 0) throw new Error("DEG case #" + i + " must yield no stations");
 	}
 
+	// ── R2: render containment must not fight the scroller ────────────────────
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		// `content-visibility: auto` lays off-screen cards out at their intrinsic size.
+		// The fallback used to be 120px against a measured 214px, so every card entering
+		// the viewport changed the scroller's extent and the thumb jumped. The `auto`
+		// keyword makes the browser remember real sizes; the fallback must also match
+		// the measurement rather than guess low.
+		const rule = src.match(/\.dstv_station\{content-visibility:auto;([^"]*?)width:264px/);
+		if (rule === null) throw new Error("R2 stations must declare containment explicitly");
+		const decls = [...rule[1].matchAll(/contain-intrinsic-size:([^;]+);/g)].map((m) => m[1].trim());
+		// Progressive enhancement: the plain-length form first (works everywhere
+		// containment does), then the `auto` form that remembers real sizes.
+		if (decls.length !== 2) throw new Error("R2 expected a fallback and an auto override, got " + decls.length);
+		const value = decls[1];
+		if (!decls[0].startsWith("264px")) throw new Error("R2 the fallback must state the card width, got " + decls[0]);
+		if (!value.startsWith("auto ")) throw new Error("R2 intrinsic size must use the auto keyword, got: " + value);
+		const parts = value.slice(5).trim().split(/\s+/);
+		if (parts[0] !== "264px") throw new Error("R2 card width fallback must match the fixed 264px card, got " + parts[0]);
+		if (Number.parseInt(parts[1], 10) < 200) throw new Error("R2 height fallback must be near the measured 214px, got " + parts[1]);
+		// A hidden tab must not keep polling the composer.
+		if (!/visibilityState !== "hidden"/.test(src)) throw new Error("R2 composer polling must pause while the document is hidden");
+	}
+
 	// ── N1: turn anchors must stop paging once the window covers them ──────────
 	// Regression this pins: `p`/`t` anchors used to report "no seq bound", so the
 	// paging floor was a no-op and a deep turn link pulled the full page budget
