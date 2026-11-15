@@ -861,6 +861,26 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (out.stations.length !== 0) throw new Error("DEG case #" + i + " must yield no stations");
 	}
 
+	// ── V1: the provenance split must stay true ───────────────────────────────
+	// docs/PROVENANCE.md is how a future reader (or upstream) tells "ours" from
+	// "theirs". A stale copy is worse than none, so the suite regenerates the split
+	// and compares. Upstream may legitimately be missing in a tarball install, in
+	// which case the check is skipped loudly rather than silently passing.
+	{
+		const { execFileSync } = require("node:child_process");
+		const path = require("node:path");
+		const repo = path.join(__dirname, "..");
+		let hasUpstream = true;
+		try { execFileSync("git", ["rev-parse", "--verify", "v0.3.0^{commit}"], { cwd: repo, stdio: "ignore" }); }
+		catch { hasUpstream = false; }
+		if (!hasUpstream) {
+			console.log("V1 skipped: upstream tag v0.3.0 not available (not a git checkout?)");
+		} else {
+			const check = require("node:child_process").spawnSync(process.execPath, [path.join(repo, "scripts", "provenance.mjs"), "--check"], { cwd: repo, encoding: "utf8" });
+			if (check.status !== 0) throw new Error("V1 docs/PROVENANCE.md is stale — run node scripts/provenance.mjs\n" + (check.stderr || ""));
+		}
+	}
+
 	// ── A1: accessibility — colour, motion, semantics ─────────────────────────
 	{
 		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
