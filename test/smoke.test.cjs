@@ -983,6 +983,12 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/stationAriaLabel\(s, i \+ 1, N, t\)/.test(src)) throw new Error("A1 stations need an accessible name");
 		if (!/tabIndex: isActive \|\| \(revealed === null && i === 0\) \? 0 : -1/.test(src)) throw new Error("A1 roving tabindex must keep exactly one station tabbable");
 		if (!/stationOnKeyDown\(ev, i\)/.test(src)) throw new Error("A1 stations must handle arrow keys");
+		// Focus that cannot be seen is not focus: roving tabindex is useless without a
+		// visible ring, and a placeholder is not an accessible name.
+		if (!/\.dstv_station:focus-visible\{outline:2px solid var\(--dstv-info\)/.test(src)) throw new Error("A1 stations need a visible focus ring");
+		if (/dstv_station:focus\{outline:none\}/.test(src)) throw new Error("A1 the focus ring must not be suppressed");
+		const labelCount = (src.match(/"aria-label": t\("(?:anchor\.jumpLabel|search\.label)"\)/g) || []).length;
+		if (labelCount !== 2) throw new Error("A1 both inputs need an accessible name, found " + labelCount);
 
 		// And the label builder itself has to produce something usable.
 		const label = stationAriaLabel({ kind: "step", stepNo: 3, turn: 2, meta: ["4工具"], hasError: false }, 7, 66, t);

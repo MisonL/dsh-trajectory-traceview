@@ -1773,3 +1773,15 @@ if (parsed.form === "p" || parsed.form === "t") return 0;
 #### 五、流程上的收获
 
 `docs/PROVENANCE.md` 的过期守卫**当场拦了我一次**：改完 `anchorLoadTarget` 后跑测试，`V1` 直接报 `PROVENANCE.md is stale`。这说明这个守卫不是摆设——它会在每次真实改动时要求刷新清单。
+
+### 12.32 两个无障碍缺口：焦点不可见、输入框无名称（2026-11-15）
+
+上一轮做 roving tabindex 时留下两个洞，都是我引入的：
+
+**(1) 键盘聚焦站点后看不到焦点在哪。** 全文件只有 `.dstv_search:focus-within` 一条（输入框容器），站点卡**没有任何 focus 样式**。roving tabindex 让 Tab 能落进列表，但落进去之后用户不知道落在哪一格——这比不能 Tab 更糟，因为焦点是"看不见的"。
+
+补 `.dstv_station:focus-visible{outline:2px solid var(--dstv-info);outline-offset:2px}`，并用 `:focus:not(:focus-visible)` 保证鼠标点击不出现焦点环。
+
+**(2) 搜索框与锚点输入框没有无障碍名称。** 两者都只有 `placeholder`。placeholder **不是**可访问名称：读屏可能跳过，而且一旦有内容就消失。补 `aria-label`，文案进 i18n（中英各一条）。
+
+测试：3 条新断言 + 2 个变异（去掉焦点环 → 红；删掉一个 `aria-label` → 红）。
