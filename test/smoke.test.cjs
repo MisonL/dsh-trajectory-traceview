@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -794,8 +794,17 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const got = fmtDur(input);
 		if (got !== want) throw new Error("DUR fmtDur(" + String(input) + ") = " + got + ", want " + want);
 	}
-	// boundary: just under a minute is still seconds
-	if (!fmtDur(59999).endsWith(" s")) throw new Error("DUR 59999 ms must stay in seconds");
+	// Boundary: rounding happens BEFORE the unit is chosen, so 59,960 ms is "1.0 min"
+	// (it rounds to 60 s) while 59,900 ms is still "59.9 s". The old code printed
+	// "60.0 s" for the former — a value labelled seconds that reads as a minute.
+	if (fmtDur(59900) !== "59.9 s") throw new Error("DUR 59900 ms must stay in seconds, got " + fmtDur(59900));
+	if (fmtDur(59960) !== "1.0 min") throw new Error("DUR 59960 ms must promote to minutes, got " + fmtDur(59960));
+	if (fmtDur(3599999) !== "1.0 h") throw new Error("DUR 3599999 ms must promote to hours, got " + fmtDur(3599999));
+	// Token magnitudes: a long session really reaches 1e10, and 999,999,999 must not
+	// print a four-digit mantissa.
+	if (fmtTokens(16300000000) !== "16.3B") throw new Error("TOK 1.63e10 must read as B, got " + fmtTokens(16300000000));
+	if (fmtTokens(999950000) !== "1.0B") throw new Error("TOK 999,950,000 must promote to B, got " + fmtTokens(999950000));
+	if (fmtTokens(999949999) !== "999.9M") throw new Error("TOK 999,949,999 must stay in M, got " + fmtTokens(999949999));
 
 	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
 	// Window-edge steps routinely lack stepStartTime / completedTime; the three
