@@ -7,6 +7,8 @@
 > **Render the AI execution flow of a DeepSeek Harness Web GUI session as a replayable, horizontal timeline — every step's actions and every raw request sent to the model, laid out in front of you.**
 > Built for learning and tuning prompts: wondering why the AI answered that way? Open Trace View to see what it reasoned about, which tools it called, what results it got, and the actual message payload it saw at the time.
 
+**Version baseline**: forked from upstream `v0.3.0` (commit `2d1d07d`, 2026-08-26). Upstream has not released since (three commits in total). This repository has evolved independently from `0.4.0`, so **the version numbers are no longer comparable to upstream** — do not read `0.9.x` as an upstream version. Per-file and per-function provenance lives in [`docs/PROVENANCE.md`](docs/PROVENANCE.md) (auto-generated). Versioning rules: [§11](#11-versioning).
+
 > **This is the Plus edition, not upstream.** Built on [AFAP/dsh-trajectory-traceview](https://github.com/AFAP/dsh-trajectory-traceview) (MIT): every upstream capability is kept, plus stable anchors, orphan tool-result stations, inline durations, a clock axis, and an explicit search-scope badge. **Do not install both** (you would get two "Trace View" tabs) — run `dsh plugin --profile web remove dsh-trajectory-traceview` first.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -34,56 +36,58 @@ session trajectory (views.get("trajectory") snapshot — reuses official data as
 
 ## 2. Features
 
+Each item is tagged **〔upstream〕** (present in upstream v0.3.0) or **〔Plus〕** (added or changed here).
+
 ### Flow overview
 
-- ✅ Horizontal timeline + top **minimap**: one color block per station (user=blue / step=green / tool=orange / compaction=purple / error=red / retry=yellow / command=cyan); click a block to jump instantly; the current station is highlighted during replay.
-- ✅ Full event stream: user messages, assistant steps, tool calls, **context compaction**, **turn failures**, **model retries**, **max-output cutoffs** and **commands** all land on the timeline in time order; compaction / command events are pinned to their owning turn by `seq`.
-- ✅ KPI bar: turns / steps / tool count / errors / total tool time / request & generation tokens, a live "current step" indicator, and the active model name.
-- ✅ Stations are labeled with **real wall-clock time** (not event indexes).
+- ✅ 〔upstream〕 Horizontal timeline + top **minimap**: one color block per station (user=blue / step=green / tool=orange / compaction=purple / error=red / retry=yellow / command=cyan); click a block to jump instantly; the current station is highlighted during replay.
+- ✅ 〔upstream〕 Full event stream: user messages, assistant steps, tool calls, **context compaction**, **turn failures**, **model retries**, **max-output cutoffs** and **commands** all land on the timeline in time order; compaction / command events are pinned to their owning turn by `seq`.
+- ✅ 〔upstream〕 KPI bar: turns / steps / tool count / errors / total tool time / request & generation tokens, a live "current step" indicator, and the active model name.
+- ✅ 〔upstream〕 Stations are labeled with **real wall-clock time** (not event indexes).
 
 ### Finding what you want
 
-- ✅ 🔍 **Search**: filter stations by tool name / args / body text / error name; hits get a gold outline plus a minimap highlight; `Enter` / `Shift+Enter` or `↑` `↓` step through hits; `/` or `f` focuses the search box, `Esc` clears.
-- ✅ **⇤ / ⇥ turn jumps** (PageUp / PageDown): hop between turn start points.
-- ✅ **⇣ follow mode**: while the AI is working, new stations auto-scroll into view; any manual navigation pauses following, ⏭ "show all" resumes it.
-- ✅ **Inspect deep-link contract**: implements the session view's `inspect` protocol — if a tool-inspection request arrives while this tab is active, it locates the station containing that call.
-- ✅ **⬆ load older history**: one-click paging for events outside the long-session window (reuses the session's `hasMore` / `loadOlder`).
-- ✅ **Explicit search scope** (Plus): search only covers the **currently loaded** trace, so the hit counter carries a `⬆ loaded range only` badge — click it to page in one more chunk, and the newly loaded stations join the search immediately. Unloaded history is **never** reported as "no match".
+- ✅ 〔upstream〕 🔍 **Search**: filter stations by tool name / args / body text / error name; hits get a gold outline plus a minimap highlight; `Enter` / `Shift+Enter` or `↑` `↓` step through hits; `/` or `f` focuses the search box, `Esc` clears.
+- ✅ 〔upstream〕 **⇤ / ⇥ turn jumps** (PageUp / PageDown): hop between turn start points.
+- ✅ 〔upstream〕 **⇣ follow mode**: while the AI is working, new stations auto-scroll into view; any manual navigation pauses following, ⏭ "show all" resumes it.
+- ✅ 〔upstream〕 **Inspect deep-link contract**: implements the session view's `inspect` protocol — if a tool-inspection request arrives while this tab is active, it locates the station containing that call.
+- ✅ 〔upstream〕 **⬆ load older history**: one-click paging for events outside the long-session window (reuses the session's `hasMore` / `loadOlder`).
+- ✅ 〔upstream〕 **Explicit search scope** (Plus): search only covers the **currently loaded** trace, so the hit counter carries a `⬆ loaded range only` badge — click it to page in one more chunk, and the newly loaded stations join the search immediately. Unloaded history is **never** reported as "no match".
 
 ### Locatable, copyable stations (Plus)
 
-- ✅ 🔗 **Stable anchors**: every station has a copyable reference (🔗 in the detail header) such as `tvp1:e3019`. Paste it into the 🔗 box in the toolbar and press Enter; **the address bar mirrors it as `#tvp1:e3019`**, so the link survives a reload and can be shared.
-- ✅ **Cross-page locating**: when the target sits in unloaded history, older pages are pulled automatically until it appears (page-bounded; on hitting the cap it says "not in the loaded window" instead of pretending to succeed).
-- ✅ **Honest about synthetic records**: records that are not yet durable (an interrupted assistant message, a tool call cut off mid-flight) get a `tvp1:p3s7`-style anchor and are explicitly marked "not persisted, not deep-linkable" instead of handing out a link that dies on reload.
-- ✅ **Orphan tool results still appear**: a `ToolResultNode` whose assistant header fell outside the window (`call === null`) is no longer lost — it becomes its own `orphan-tool` station, searchable and locatable like any other.
+- ✅ 〔Plus〕 🔗 **Stable anchors**: every station has a copyable reference (🔗 in the detail header) such as `tvp1:e3019`. Paste it into the 🔗 box in the toolbar and press Enter; **the address bar mirrors it as `#tvp1:e3019`**, so the link survives a reload and can be shared.
+- ✅ 〔Plus〕 **Cross-page locating**: when the target sits in unloaded history, older pages are pulled automatically until it appears (page-bounded; on hitting the cap it says "not in the loaded window" instead of pretending to succeed).
+- ✅ 〔Plus〕 **Honest about synthetic records**: records that are not yet durable (an interrupted assistant message, a tool call cut off mid-flight) get a `tvp1:p3s7`-style anchor and are explicitly marked "not persisted, not deep-linkable" instead of handing out a link that dies on reload.
+- ✅ 〔Plus〕 **Orphan tool results still appear**: a `ToolResultNode` whose assistant header fell outside the window (`call === null`) is no longer lost — it becomes its own `orphan-tool` station, searchable and locatable like any other.
 
 ### Time you can actually see (Plus)
 
-- ✅ **Inline start/end times**: each step card shows `14:24:21 → 14:24:53` directly — no hover, no detail panel.
-- ✅ **Honest duration provenance**: "has timing" / "no timing recorded" / "partial timing" are three distinct states — a missing record is never rendered as 0.
-- ✅ **Idle bands**: gaps longer than 30 s between two actions are labeled on the rail (`⏸ 47,628 ms`), answering "what were those 4 hours spent on".
-- ✅ **⏱ even / clock toggle**: even spacing for reading, clock mode scales idle bands logarithmically so long waits are visible at a glance.
+- ✅ 〔Plus〕 **Inline start/end times**: each step card shows `14:24:21 → 14:24:53` directly — no hover, no detail panel.
+- ✅ 〔Plus〕 **Honest duration provenance**: "has timing" / "no timing recorded" / "partial timing" are three distinct states — a missing record is never rendered as 0.
+- ✅ 〔Plus〕 **Idle bands**: gaps longer than 30 s between two actions are labeled on the rail (`⏸ 47,628 ms`), answering "what were those 4 hours spent on".
+- ✅ 〔Plus〕 **⏱ even / clock toggle**: even spacing for reading, clock mode scales idle bands logarithmically so long waits are visible at a glance.
 
 ### What each step did (bottom "Step Detail")
 
-- ✅ Assistant output text and 💭 reasoning content (collapsible).
-- ✅ Every tool call: args (formatted JSON), **full tool result**, a **complete sub-call card** (each sub-call's own args / result / duration / error), a duration bar, and the error code.
-- ✅ Step-level metadata: ⏱ total step duration, time-to-first-token (TTFT), ⚡ decode throughput tok/s, token usage, and a "stopped" interruption flag.
-- ✅ The detail panel can be ⤢ expanded to full height / ⤡ collapsed.
+- ✅ 〔upstream〕 Assistant output text and 💭 reasoning content (collapsible).
+- ✅ 〔upstream〕 Every tool call: args (formatted JSON), **full tool result**, a **complete sub-call card** (each sub-call's own args / result / duration / error), a duration bar, and the error code.
+- ✅ 〔upstream〕 Step-level metadata: ⏱ total step duration, time-to-first-token (TTFT), ⚡ decode throughput tok/s, token usage, and a "stopped" interruption flag.
+- ✅ 〔upstream〕 The detail panel can be ⤢ expanded to full height / ⤡ collapsed.
 
 ### Raw request (bottom "Raw Request" tab, shortcut `r`)
 
-- ✅ **Model config**: provider / model / temperature / reasoningEffort / thinking / maxTokens / stop / status / duration / retry info.
-- ✅ **⚡ Prompt diff**: what changed versus the previous request — system-prompt character delta and `+ added` / `- removed` tool names (`initial` = the first system prompt).
-- ✅ **Full system prompt**: character count + one-click copy (includes the tool-catalog JSON).
-- ✅ **Tool catalog**: every tool schema carried by that request, expanded one by one; copyable.
-- ✅ **Message list**: the model-visible messages **approximately rebuilt** from the session log (user / assistant / tool results, with compaction markers), each expandable in full; the whole request payload JSON is copyable. It is rebuilt **only while this tab is open** (lazy — long sessions stay snappy).
-- ✅ **Token usage**: inbound (incl. cache reads / writes) and outbound (incl. thinking) breakdown.
-- ✅ **Context-compaction stations** have their own "Raw Request" too: the compaction request's model / duration / usage plus the **full compaction output**.
+- ✅ 〔upstream〕 **Model config**: provider / model / temperature / reasoningEffort / thinking / maxTokens / stop / status / duration / retry info.
+- ✅ 〔upstream〕 **⚡ Prompt diff**: what changed versus the previous request — system-prompt character delta and `+ added` / `- removed` tool names (`initial` = the first system prompt).
+- ✅ 〔upstream〕 **Full system prompt**: character count + one-click copy (includes the tool-catalog JSON).
+- ✅ 〔upstream〕 **Tool catalog**: every tool schema carried by that request, expanded one by one; copyable.
+- ✅ 〔upstream〕 **Message list**: the model-visible messages **approximately rebuilt** from the session log (user / assistant / tool results, with compaction markers), each expandable in full; the whole request payload JSON is copyable. It is rebuilt **only while this tab is open** (lazy — long sessions stay snappy).
+- ✅ 〔upstream〕 **Token usage**: inbound (incl. cache reads / writes) and outbound (incl. thinking) breakdown.
+- ✅ 〔upstream〕 **Context-compaction stations** have their own "Raw Request" too: the compaction request's model / duration / usage plus the **full compaction output**.
 
 ### Export study notes
 
-- ✅ Header **📋 Markdown**: one click copies the whole trace as Markdown — each step's reasoning / text / tool args / results and a per-step request-config summary, plus an appendix with the first request's system prompt and tool catalog.
+- ✅ 〔upstream〕 Header **📋 Markdown**: one click copies the whole trace as Markdown — each step's reasoning / text / tool args / results and a per-step request-config summary, plus an appendix with the first request's system prompt and tool catalog.
 
 ## 3. Preview
 
@@ -221,3 +225,19 @@ Substantive changes versus upstream: stable anchors and deep-link parsing, orpha
 ---
 
 > **Disclaimer**: This plugin is a local learning / debugging tool. The authors are not responsible for any decision made based on trace data (including approximately rebuilt message payloads); please don't share session traces containing sensitive content on shared / multi-user screens.
+## 11. Versioning
+
+**Baseline**: forked from upstream `v0.3.0` (commit `2d1d07d`, 2026-08-26); upstream has not published since. This repo has evolved independently from `0.4.0`.
+
+**Numbering** — the second digit tells you whether you must upgrade alongside the host:
+
+| Change | Position | Example |
+| --- | --- | --- |
+| `engines.dsh` pin moves (host upgrade) | **minor** | `0.7.0 → 0.8.0` for DSH 0.2.2 |
+| New capability, or changed behaviour | **minor** | `0.8.2 → 0.9.0` light theme + a11y |
+| Fixes, performance, copy, docs | **patch** | `0.8.1 → 0.8.2` |
+| Breaking (anchor format, view id, config) | **major** | none yet |
+
+`engines.dsh` is pinned to a **single** version, so every host upgrade may require a matching plugin release. That is why the number moves fastest — it is not feature bloat.
+
+**Release steps**: bump the version, tag it (`v0.9.1`), and run `node scripts/provenance.mjs`. The provenance doc is guarded by the smoke test (`V1`) and fails the suite when stale.
