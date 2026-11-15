@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -861,6 +861,40 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (out.stations.length !== 0) throw new Error("DEG case #" + i + " must yield no stations");
 	}
 
+	// ── N1: turn anchors must stop paging once the window covers them ──────────
+	// Regression this pins: `p`/`t` anchors used to report "no seq bound", so the
+	// paging floor was a no-op and a deep turn link pulled the full page budget
+	// (observed: 66 -> 1389 stations on one session) even when the request was
+	// already satisfiable.
+	{
+		const win = [
+			{ kind: "step", turn: 9, anchorSeq: 900 },
+			{ kind: "step", turn: 10, anchorSeq: 1000 },
+			{ kind: "user", anchorSeq: 850 }
+		];
+		if (anchorTurnFloor(win) !== 9) throw new Error("N1 turn floor must be the oldest turn, got " + anchorTurnFloor(win));
+		// Anchor older than the window -> keep paging.
+		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 3, step: 1 }, win) !== false) throw new Error("N1 an older turn must not be considered covered");
+		// Anchor inside the window -> stop paging.
+		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 10, step: 1 }, win) !== true) throw new Error("N1 a covered turn must stop paging");
+		if (anchorCoveredByWindow({ ok: true, form: "t", turn: 9, step: 2 }, win) !== true) throw new Error("N1 t-anchors must behave like p-anchors");
+		// Exactly at the floor: covered (the turn is loaded).
+		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 9, step: 1 }, win) !== true) throw new Error("N1 the floor turn itself is loaded");
+		// Seq anchors keep their existing behaviour.
+		if (anchorCoveredByWindow({ ok: true, form: "e", seq: 700 }, win) !== false) throw new Error("N1 an older seq must not be covered");
+		if (anchorCoveredByWindow({ ok: true, form: "e", seq: 950 }, win) !== true) throw new Error("N1 a covered seq must stop paging");
+		// Unknown floor -> keep paging rather than guessing.
+		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 3, step: 1 }, [{ kind: "step" }]) !== false) throw new Error("N1 unknown window must not claim coverage");
+		if (anchorTurnFloor([{ kind: "step" }]) !== null) throw new Error("N1 turn floor must be null when no station carries a turn");
+		// The loop itself must consult it (guards against the helper being orphaned).
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		// Assert the CONDITION, not just the call: an earlier version of this check
+		// only looked for the call, so reverting the condition to the old
+		// `target !== 0` (which is always false for p/t anchors) stayed green.
+		if (!/target !== 0 \|\| parsed\.form === "p" \|\| parsed\.form === "t"/.test(src)) throw new Error("N1 turn anchors must enter the coverage check");
+		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
+	}
+
 	// ── V1: the provenance split must stay true ───────────────────────────────
 	// docs/PROVENANCE.md is how a future reader (or upstream) tells "ours" from
 	// "theirs". A stale copy is worse than none, so the suite regenerates the split
@@ -928,6 +962,16 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const strayHex = (src.match(/#[0-9a-fA-F]{6}\b/g) || []).map((h) => h.toLowerCase()).filter((h) => !paletteDefs.has(h));
 		if (strayHex.length > 0) throw new Error("A1 colours must go through vars, found: " + [...new Set(strayHex)].join(" "));
 		if (paletteDefs.size < 12) throw new Error("A1 expected both palettes to declare the full role set");
+
+		// Tints must derive from the palette too, otherwise the light theme's text is
+		// dark green on a still-dark-ish backdrop. color-mix keeps the alpha ramp while
+		// following the active palette. Only theme-neutral shadows may stay literal.
+		const tints = src.match(/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[0-9.]+\s*\)/g) || [];
+		const neutralTints = tints.filter((t) => /rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/.test(t));
+		if (tints.length !== neutralTints.length) {
+			throw new Error("A1 colour tints must use color-mix(var(--dstv-*)), found: " + tints.filter((t) => !neutralTints.includes(t)).slice(0, 3).join(" "));
+		}
+		if (!/color-mix\(in srgb,var\(--dstv-ok\)/.test(src)) throw new Error("A1 tints must be derived from the semantic palette");
 
 		if (!/@media \(prefers-reduced-motion: reduce\)/.test(src)) throw new Error("A1 CSS must honour reduced motion");
 		if (!/reduceMotion\(\)/.test(src)) throw new Error("A1 smooth programmatic scrolling must honour reduced motion too");

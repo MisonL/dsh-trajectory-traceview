@@ -31,7 +31,7 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**16 个原样保留、8 个被修改、0 个被删除**；本仓**新增 20 个**。
+上游 24 个函数：**16 个原样保留、8 个被修改、0 个被删除**；本仓**新增 22 个**。
 
 ### 原样保留（16）
 
@@ -67,13 +67,15 @@
 - `newStepState`
 - `promptDiffOf`
 
-### 本仓新增（20）
+### 本仓新增（22）
 
 上游完全没有：
 
+- `anchorCoveredByWindow`
 - `anchorLoadTarget`
 - `anchorOf`
 - `anchorSeqFloor`
+- `anchorTurnFloor`
 - `buildStepMarkdown`
 - `changedTools`
 - `clockGapWidth`
