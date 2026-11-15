@@ -948,6 +948,35 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── S1: the stylesheet must actually be one stylesheet ────────────────────
+	// A single missing `+` between two string literals is legal JavaScript: the
+	// statement ends there via ASI and every later rule becomes a discarded expression
+	// statement. The page then renders with the palette and nothing else — which is
+	// exactly what shipped from 0.9.0 to 0.9.5 (a 582-char style tag, plain text dump).
+	// So evaluate the statement and demand that late-file rules are present.
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		const start = src.indexOf("const css =");
+		const end = src.indexOf("const tagId", start);
+		if (start < 0 || end < 0) throw new Error("S1 css statement not found");
+		const stmt = src.slice(start, end).split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+		const css = new Function("const t=(k)=>k;\n" + stmt + "\nreturn css;")();
+		if (typeof css !== "string") throw new Error("S1 css must be a string");
+		// Length and rule count catch a truncation at any point.
+		if (css.length < 20000) throw new Error("S1 stylesheet looks truncated: " + css.length + " chars");
+		const rules = (css.match(/\{/g) || []).length;
+		if (rules < 180) throw new Error("S1 stylesheet has only " + rules + " rules");
+		// Markers from the first, middle and last fragments: a dropped operator between
+		// any two of them shows up here.
+		const markers = [".dstv_root{--dstv-ok:", ".dstv_station{content-visibility:auto", ".dstv_modelChip{"];
+		for (const m of markers) {
+			if (!css.includes(m)) throw new Error("S1 stylesheet is missing " + m + " (a concatenation operator was probably dropped)");
+		}
+		let depth = 0;
+		for (const ch of css) { if (ch === "{") depth += 1; else if (ch === "}") depth -= 1; }
+		if (depth !== 0) throw new Error("S1 stylesheet braces are unbalanced: " + depth);
+	}
+
 	// ── A1: accessibility — colour, motion, semantics ─────────────────────────
 	{
 		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
