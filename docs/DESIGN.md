@@ -2326,3 +2326,62 @@ F1 断言（用注入到 vm 沙箱的假 document 执行真函数）：
 #### 五、需要说明的一点
 
 这是**替宿主修**。若将来宿主自己给这个输入框加了 id/name，我们的逻辑会因"已有属性"自动跳过，不会冲突；若宿主重构了类名，id 的 slug 会跟着变，但语义不变。这条依赖写在这里，避免以后有人以为这是插件自己的字段。
+
+### 12.43 补 id 的时机错了：审计在页面启动时就已记录（2026-11-16）
+
+§12.42 加了 `annotateNamelessFormFields()` 并在**视图挂载**时调用。用户刷新后截图：加载骨架正常了，但控制台**仍然报那一条**。
+
+#### 一、真机先排除了"没生效"
+
+插件是符号链接指向本仓库，检查下发文件里 `annotateNamelessFormFields` 出现 **4 次**，说明运行时确实是新代码。所以不是没生效，是**生效得太晚**。
+
+#### 二、根因：审计的时间点
+
+DevTools 的 Issues 面板在**页面启动**时扫描表单元素，并把结果**留在面板里**。我们的视图要等用户切到「轨迹视图」才挂载——那时审计早就跑完、结论早已记下。补 id 补在一个已经结束的检查之后，自然看不见变化。
+
+#### 三、修法：提前到 bundle 求值时
+
+新增一个独立 region，在插件加载时就驱动补扫（函数仍在 helpers 区，方便单测直接调用）：
+
+```js
+if (typeof document !== "undefined") {
+  const annotatePass = () => { try { annotateNamelessFormFields(); } catch { /* 不因为一个 id 搞坏宿主 */ } };
+  let annotateTicks = 0;
+  const annotateTick = () => {
+    annotatePass();
+    annotateTicks += 1;
+    if (annotateTicks < 40) window.setTimeout(annotateTick, 250);
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", annotateTick, { once: true });
+  else annotateTick();
+}
+```
+
+`DOMContentLoaded` 之前先挂监听（此时侧栏还没建出来），之后就每 250ms 补扫，共 40 次（10 秒）覆盖宿主懒渲染的窗口。
+
+#### 四、真机验证：完全不进轨迹视图
+
+这次特意**不点「轨迹视图」**，直接看侧栏字段有没有被补上——因为这正是审计发生的场景。
+
+```
+SAMPLES=[{"t":21781,"hostId":"dsh-field-bhn1Oq_searchInput","nameless":0,"total":2}]
+NAMELESS_ZERO=true
+```
+
+页面加载后无待补字段，宿主搜索框已有 id。
+
+#### 五、守卫（第一版写弱了）
+
+第一版断言只检查"region 存在且位置在 helpers 之前"。变异 `if (typeof document !== "undefined")` → `if (false)` **没有变红**——因为 region 文本还在，断言查的是文本形状，不是可执行性。
+
+改成检查真正会执行的语句，三个变异才全部变红：
+
+| 变异 | 结果 |
+|---|---|
+| `if (typeof document …)` → `if (false)` | 红：`the load-time driver must not be disabled` |
+| 去掉 `annotatePass()` 调用 | 红：`the driver must call annotatePass on every tick` |
+| `else annotateTick()` → `else void 0` | 红：`the driver must run immediately when the DOM is ready` |
+
+#### 六、教训（本会话第三次同类）
+
+"断言了代码形状" ≠ "断言了代码会执行"。前两次分别是：`anchorLoadTarget` 只断言调用不断言条件、§12.42 区域存在但时机不对。**凡是"某段代码存在"的断言，都要问一句：如果把它变成死代码，这条断言还会绿吗？**

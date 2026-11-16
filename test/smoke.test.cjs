@@ -966,6 +966,21 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// Wiring: the annotation has to actually run from the view.
 		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
 		if ((src.match(/annotateNamelessFormFields\(\)/g) || []).length < 2) throw new Error("F1 the annotator must be called from the view effect");
+		// DevTools records the violation while the page boots and keeps it in the Issues
+		// panel, so annotating only from the view's mount effect is too late. There must
+		// be a load-time driver in a dedicated region BEFORE the helpers region.
+		const loadRegion = src.indexOf("//#region host form-field ids (runs at plugin load");
+		const helpersRegion = src.indexOf("//#region pure helpers: snapshot -> timeline tree");
+		if (loadRegion < 0) throw new Error("F1 a load-time annotation driver is required");
+		if (!(loadRegion < helpersRegion)) throw new Error("F1 the load-time driver must run before the helpers region");
+		if (!/document\.readyState === "loading"[^;]*DOMContentLoaded/.test(src)) throw new Error("F1 must also cover fields built after DOMContentLoaded");
+		// The driver must be reachable, not merely present: a dead `if (false)` guard, a
+		// disabled retry, or a missing initial pass would all leave the region intact
+		// while doing nothing. Assert the statements that actually execute.
+		const region = src.slice(loadRegion, helpersRegion);
+		if (/if \(false\)/.test(region)) throw new Error("F1 the load-time driver must not be disabled");
+		if (!/annotatePass\(\);\s*annotateTicks \+= 1;/.test(region)) throw new Error("F1 the driver must call annotatePass on every tick");
+		if (!/else annotateTick\(\);/.test(region)) throw new Error("F1 the driver must run immediately when the DOM is ready");
 	}
 
 	// ── L1: loading must not be reported as empty ─────────────────────────────
