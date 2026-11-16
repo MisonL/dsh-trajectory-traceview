@@ -2445,3 +2445,51 @@ return jsx("div", { className: "dstv_md" }, nodes);   // ← nodes 被当成 key
 #### 六、教训
 
 **"单测绿"≠"渲染对"。** 纯函数的输出结构可以对，而把它交给视图的那一步（参数位置、props 名）仍然可能是错的。凡是"数据 → 组件"的接缝，必须有真机断言兜住；本项目里这条接缝已经连着坏了三次（§12.35 CSS 拼接、§12.43 死代码、本条）。
+
+### 12.45 输入框该浮盖不该占位；详情面板的标签该是标题不是前缀（2026-11-16）
+
+用户提出两个问题：① 步骤详情里"用户/助手"和正文挤在一起不好看；② 切到轨迹页，底下的发消息组件还在。
+
+#### 一、输入框：我一直在治标
+
+§12.26 起我一直做的是**给底部留白**（`paddingBottom: composerH`），让内容能滚出输入框的遮挡。这只解决了"看不见末尾"，没解决"输入框本来就不该占一行"。
+
+查宿主 CSS 才发现关键机制：
+
+```css
+.wSkVaW_scrollBody:has([data-conversation-composer-overlay]) > .wSkVaW_composerSeat{
+  right:var(--dsh-scrollbar-width); position:absolute; bottom:0; left:0 }
+.wSkVaW_scrollBody:has([data-conversation-composer-overlay]) > ... > .wSkVaW_viewArea{
+  flex:1 1 0; min-height:0; overflow:hidden }
+```
+
+宿主是**按 `data-conversation-composer-overlay` 这个属性**判断"当前视图要不要浮盖输入框"的。官方轨迹视图在自己的根 div 上就是 `"data-conversation-composer-overlay": ""`。我们的视图没设，输入框只好按普通布局占一行——于是它永远挂在我们下面。
+
+修复：根元素加上这个属性。实测 `composerSeat` 的 `position` 从静态变成 **`absolute`**、`bottom:0`。留白逻辑保留（浮盖仍然会挡住最后几行）。
+
+#### 二、详情面板：标签是标题，不是前缀
+
+原结构是 `flex-direction:column` 里先放 `<span>` 标签、再放正文 `<div>`。问题在于 `.dstv_dText` 保留着 `white-space:pre-wrap`，且标签与正文之间没有视觉边界，读起来像一句话被拆开。
+
+改法：
+
+- 助手 / 用户正文都套 `.dstv_dSectionBody`：加边框、圆角、内边距、次级背景，形成"标题 + 内容"的卡片
+- 标签 `.dstv_dLabel` 的 `margin-bottom` 清零，由卡片 `gap` 控制
+- 用户正文同样走 `MarkdownText`（用户也经常贴代码块和列表）
+
+真机测量（含正文的详情区块）：
+
+| 项 | 结果 |
+|---|---|
+| 卡片 | `border-radius:9px`、`padding:8px 10px`、`border:1px` |
+| 标签底 / 正文顶 | 603px / 608px —— **正文在标签下方 5px**，不再是同一行 |
+| 区块内含 Markdown 渲染结果 | 1 |
+| 正文长度 | 85 字符 |
+
+#### 三、守卫
+
+C1 断言：根元素必须有 overlay 属性（且必须**在根元素的 props 对象内**）、必须保留 composer 高度留白、详情正文必须有卡片样式且使用卡片布局。
+
+三个变异全部变红：移除属性 / 把属性挪到别的元素 / 去掉卡片边框。
+
+写守卫时踩了一个小坑：最初用"属性前 400 字符内找 `className`"定位，而解释这个属性的注释比 400 字符还长，导致断言误报。改成**从属性位置向前找最近的 `className`，并要求两者之间没有 `}`**（即同属一个对象字面量）——结构判断比距离猜测可靠。

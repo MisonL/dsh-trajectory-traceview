@@ -928,6 +928,31 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── C1: composer must overlay, not sit below ──────────────────────────────
+	// A read-only replay surface should not leave a permanently open message box
+	// under it. The host keys its overlapping layout off `data-conversation-composer-overlay`
+	// (the official trajectory view sets it too); without the attribute the composer
+	// keeps its in-flow seat and our view is squeezed above it.
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/"data-conversation-composer-overlay": ""/.test(src)) throw new Error("C1 the view must opt into the host's overlapping composer layout");
+		// The attribute has to land on the ROOT element, next to className/tabIndex.
+		// Anchor on the overlay attribute itself, then walk back to the nearest
+		// `className: "dstv_root"` — a fixed window is wrong here because the comment
+		// explaining the attribute is longer than any window worth guessing.
+		const attrAt = src.indexOf('"data-conversation-composer-overlay"');
+		const classAt = src.lastIndexOf('className: "dstv_root"', attrAt);
+		if (classAt < 0) throw new Error("C1 the overlay attribute belongs on the view root");
+		const between = src.slice(classAt + 'className: "dstv_root"'.length, attrAt);
+		// Same object literal: no closing brace between them.
+		if (between.includes("}")) throw new Error("C1 the overlay attribute must be in the root element's props");
+		// ...and the panel still reserves room to scroll clear of the overlay.
+		if (!/paddingBottom: `\$\{composerH\}px`/.test(src)) throw new Error("C1 the panel must reserve the composer height");
+		// Detail sections: a caption glued to its prose renders as a run-on line.
+		if (!/\.dstv_dSectionBody\{[^}]*border:1px solid/.test(src)) throw new Error("C1 detail bodies need the caption card treatment");
+		if (!/className: "dstv_dSection dstv_dSectionBody"/.test(src)) throw new Error("C1 assistant detail section must use the card layout");
+	}
+
 	// ── MD1: assistant bodies are Markdown, not source ────────────────────────
 	// The detail panel used to print raw source (`**0.9.13**`, `# heading`, fences),
 	// because the container carried white-space:pre-wrap and nothing parsed it.
