@@ -928,6 +928,28 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── D2: two different durations must not share one unlabelled word ────────
+	// Cards showed a bare "103,686 ms" while the KPI is called "tool time". Summing the
+	// cards missed the KPI by 83 minutes — not because either was wrong, but because the
+	// card number is the STEP span (model + tools + gaps) and the KPI is tool time only.
+	{
+		const snap = { eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2000, turn: 1, step: 1, messageId: "m1", timing: { stepStartTime: 1000, firstTokenTime: 1500, completedTime: 9000 }, blocks: [{ kind: "tool-call", callId: "c1", name: "bash", argsRaw: "{}" }] },
+			{ kind: "tool-result", seq: 3, time: 7000, turn: 1, step: 1, callId: "c1", callTime: 5000, content: [], isError: false }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+		const tree = deriveTraceTree(snap, t);
+		const step = tree.stations.find((x) => x.kind === "step");
+		// step span 1000→9000 = 8000; tool time 5000→7000 = 2000. They must stay distinct
+		// in the data AND be distinguishable in the labels.
+		if (step.durationMs !== 8000) throw new Error("D2 the card duration is the step span, got " + step.durationMs);
+		if (tree.stats.toolMs !== 2000) throw new Error("D2 the KPI totals tool time only, got " + tree.stats.toolMs);
+		const meta = step.meta.join(" | ");
+		// The sandbox's `t` is the identity, so the chips carry the raw keys here; what
+		// matters is that the two chips use DIFFERENT labels and each carries its value.
+		if (!/meta\.stepDur 8,000 ms/.test(meta)) throw new Error("D2 the step chip must carry its own label and value, got: " + meta);
+		if (!/meta\.toolDur 2,000 ms/.test(meta)) throw new Error("D2 the tool chip must carry its own label and value, got: " + meta);
+	}
+
 	// ── D1: one bogus tool duration must not poison the totals ────────────────
 	// A real session reported 78,834,620 ms (21.9 h) for a 3-second bash call: when the
 	// log is reparsed, `callTime` can belong to a different pass and the subtraction
