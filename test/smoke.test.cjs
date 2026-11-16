@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -926,6 +926,36 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// `target !== 0` (which is always false for p/t anchors) stayed green.
 		if (!/target !== 0 \|\| parsed\.form === "p" \|\| parsed\.form === "t"/.test(src)) throw new Error("N1 turn anchors must enter the coverage check");
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
+	}
+
+	// ── M2: markdown fences must survive backtick-heavy content ───────────────
+	// Tool results routinely ARE code (a README, a diff). A fixed ``` fence closes
+	// early on such content and the rest of the export renders as garbage headings.
+	// CommonMark: a fence closes on a run of at least equal length, so the emitted
+	// fence must be strictly longer than the longest run inside.
+	{
+		if (fencedBlock("plain", "")[0] !== "```") throw new Error("M2 plain content keeps the 3-backtick fence");
+		if (fencedBlock("plain", "json").join("\n") !== "```json\nplain\n```") throw new Error("M2 the info string must ride on the opening fence");
+		const nested = fencedBlock("a\n```bash\nb\n```\nc", "");
+		if (nested[0] !== "````" || nested[2] !== "````") throw new Error("M2 a 3-backtick run inside must promote the fence to 4, got " + JSON.stringify(nested[0]));
+		const quad = fencedBlock("x\n````\ny", "");
+		if (quad[0] !== "`````") throw new Error("M2 a 4-backtick run must promote the fence to 5, got " + JSON.stringify(quad[0]));
+		if (fencedBlock(null, "")[1] !== "") throw new Error("M2 null content must become an empty block");
+		// End-to-end: the export of a session whose tool result is a README must keep
+		// the inner fences as literal text.
+		const snap = { eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "c1", name: "read", argsRaw: "{}" }] },
+			{ kind: "tool-result", seq: 3, time: 3000, turn: 1, step: 1, callId: "c1", content: [{ type: "text", text: "# t\n```bash\nnpm i\n```\n完" }], isError: false }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+		const md = buildTraceMarkdown(deriveTraceTree(snap, t), t);
+		if (!md.includes("````")) throw new Error("M2 the export must use a longer fence for backtick-heavy results");
+		const lines = md.split("\n");
+		if (lines.indexOf("```bash") !== -1 && lines.some((l, i) => l === "```bash" && lines[i - 1] === "````") === false) {
+			// 内层 ```bash 必须出现在 4 反引号围栏之内，而不是被误当围栏
+			const open = lines.indexOf("````");
+			const inner = lines.indexOf("```bash");
+			if (!(inner > open)) throw new Error("M2 the inner fence must sit inside the outer one");
+		}
 	}
 
 	// ── V1: the provenance split must stay true ───────────────────────────────

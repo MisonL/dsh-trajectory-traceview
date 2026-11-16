@@ -31,7 +31,7 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**15 个原样保留、9 个被修改、0 个被删除**；本仓**新增 22 个**。
+上游 24 个函数：**15 个原样保留、9 个被修改、0 个被删除**；本仓**新增 23 个**。
 
 ### 原样保留（15）
 
@@ -67,7 +67,7 @@
 - `newStepState`
 - `promptDiffOf`
 
-### 本仓新增（22）
+### 本仓新增（23）
 
 上游完全没有：
 
@@ -80,6 +80,7 @@
 - `changedTools`
 - `clockGapWidth`
 - `evidenceOf`
+- `fencedBlock`
 - `isEverythingUnknown`
 - `nextHashFor`
 - `parseAnchor`
