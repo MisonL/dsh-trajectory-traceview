@@ -948,6 +948,16 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (/top:-7px/.test(caret[1])) throw new Error("P3 the caret must sit below the marker, not above it");
 		// Purely decorative: assistive tech must not announce it.
 		if (!/className: "dstv_playhead", "aria-hidden": "true"/.test(src)) throw new Error("P3 the playhead is decorative and must be aria-hidden");
+		// Position must be MEASURED from the active station element, never computed from
+		// a fixed stride: stations carry padding and idle bands sit between them, so any
+		// `(R-1)*STATION_W` formula drifts left and points at the previous card.
+		if (/26 \+ \(R - 1\) \* STATION_W/.test(src)) throw new Error("P4 the playhead must not be placed by a fixed-stride formula");
+		if (!/setPlayheadLeft/.test(src)) throw new Error("P4 the playhead position must come from a measurement");
+		if (!/el\.offsetLeft \+ el\.offsetWidth \/ 2/.test(src)) throw new Error("P4 the marker must be centred on the measured station");
+		// It has to re-measure when layout can change.
+		if (!/window\.addEventListener\("resize", measureHead\)/.test(src)) throw new Error("P4 the marker must re-measure on resize");
+		// ...and the effect must depend on the revealed position.
+		if (!/\}, \[revealed, R, N\]\)/.test(src)) throw new Error("P4 the measurement effect must react to the selection");
 	}
 
 	// ── C1: composer must overlay, not sit below ──────────────────────────────
