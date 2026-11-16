@@ -956,12 +956,28 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	// So evaluate the statement and demand that late-file rules are present.
 	{
 		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
-		const start = src.indexOf("const css =");
+		const start = src.indexOf("const css = [");
 		const end = src.indexOf("const tagId", start);
 		if (start < 0 || end < 0) throw new Error("S1 css statement not found");
 		const stmt = src.slice(start, end).split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
 		const css = new Function("const t=(k)=>k;\n" + stmt + "\nreturn css;")();
 		if (typeof css !== "string") throw new Error("S1 css must be a string");
+		// The fragments live in an array literal on purpose: a missing comma is a parse
+		// error (loud), whereas the old `"…" + "…"` chain silently truncated on a missing
+		// `+` (ASI) or produced "NaN" when a `+` ended up unary. Assert the shape so the
+		// fragile form cannot come back.
+		if (!/const css = \[/.test(src)) throw new Error("S1 css must be built as a joined array, not a + chain");
+		if (/const css = "" \+/.test(src)) throw new Error("S1 + chaining of css fragments is forbidden");
+		if (!/\]\.join\(""\)/.test(src)) throw new Error("S1 the css array must be joined into one string");
+		if (!css.includes("@media (max-width: 720px)")) throw new Error("S1 the narrow-viewport rule must survive");
+		// Cascade order matters as much as presence: at equal specificity the LATER rule
+		// wins, so a narrow-screen block placed before the base rules is silently dead.
+		// That is exactly what happened — the header stayed 109/134px while the media
+		// block looked correct in the source.
+		const iNarrow = css.indexOf("@media (max-width: 720px)");
+		for (const base of [".dstv_head{position:sticky", ".dstv_legend{display:inline-flex", ".dstv_searchInput{width:150px"]) {
+			if (iNarrow < css.indexOf(base)) throw new Error("S1 the narrow-viewport block must come after " + base + " or the cascade swallows it");
+		}
 		// Length and rule count catch a truncation at any point.
 		if (css.length < 20000) throw new Error("S1 stylesheet looks truncated: " + css.length + " chars");
 		const rules = (css.match(/\{/g) || []).length;
