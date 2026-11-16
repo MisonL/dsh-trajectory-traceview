@@ -2044,3 +2044,33 @@ S1 新增两条：① CSS 必须是 `[].join("")` 形式，禁止 `+` 链；② 
 A1 新增：两个框必须分别带指定 `id` 与 `name`，且必须显式 `autoComplete="off"`。变异（删掉搜索框 `id`）→ 红：`A1 input dstv-search-input needs an id`。
 
 **教训**：无障碍是两套评分体系——`aria-label` 管读屏名称，`id`/`name` 管浏览器表单语义与自动填充。只做前者，审计工具依然会报。
+
+### 12.38 两处疑点的最终结论：一个不是问题，一个是宿主的（2026-11-16）
+
+#### 一、`blocksText` 用 `type` 而不是 `kind`——**不是 bug**
+
+我之前把它列为待查疑点，理由是本项目内部的 assistant 块用 `kind`（`kind:"text"`），而 `blocksText` 只认 `b.type`。查宿主源码后确认这是**两种不同来源的两种形状**：
+
+- **assistant 的 blocks**（流式缓冲）：`{kind:"text", text}` —— 宿主 `toAssistantBlock` 里 `case\`text\`: return {kind:\`text\`, text: block.text}`
+- **`tool-result.content`**：宿主构造 tool-result 节点时写的是 `content: message.content`，即 **LLM 消息格式**，块是 `{type:"text", text}`
+
+所以 `blocksText` 认 `type` 是对的——它正好对应它被调用时拿到的那份数据（`tool-result.content`）。实测：`blocksText([{type:"text",text:"abc"}])` → `"abc"`；`[{type:"image"}]` → `"[图片]"`；`[{type:"reasoning",text:"think"}]` → `"think"`。
+
+**结论：之前的"疑点"是我没核对调用方数据形状就下的判断，属于误报。** 不做改动。
+
+#### 二、`aria-selected`/悬浮等都没问题；剩余 DevTools 提示来自宿主
+
+用户持续看到 “A form field element should have an id or name attribute”，修复后从 **3 项降到 1 项**。真机枚举全页 4 个表单元素：
+
+| 元素 | 归属 | id/name | 可见 | 是否被报 |
+|---|---|---|---|---|
+| `bhn1Oq_searchInput`（侧栏「搜索会话名称」） | 宿主 | 无 | 是 | **是（剩余这 1 项）** |
+| `dstv-anchor-input` | 本插件 | 有 | 是 | 否 |
+| `dstv-search-input` | 本插件 | 有 | 是 | 否 |
+| `input[type=file]` | 宿主 | 无 | 否 | 否（隐藏不审计） |
+
+**结论：剩余 1 项在宿主代码里，本插件无法也不应修改。** 我们从 3 项降到 1 项，已经把自己那部分清零。
+
+#### 三、真机截图复核（0.9.8）
+
+用户提供的界面截图显示：卡片布局、横向时间轴、minimap 色块、站点详情面板、KPI 条（4 轮次 / 56 步骤 / 52 工具 / 0 错误 / 9.6 min / 21.1M tokens / 45k 输出）全部正常渲染，样式与 §12.35 修复预期一致。
