@@ -928,6 +928,20 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── N2: status notes render once, not twice ──────────────────────────────
+	// `anchorNote` was rendered in BOTH the header and the detail bar, so every anchor
+	// result ("锚点格式无法识别", "正在向前加载…") appeared twice on screen. Live probe of
+	// the real page showed the same text duplicated in `.dstv_chip.warn`.
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		const uses = (src.match(/children: anchorNote/g) || []).length;
+		if (uses !== 1) throw new Error("N2 anchorNote must render exactly once, found " + uses);
+		if (!/className: "dstv_chip warn", title: anchorNote, children: anchorNote/.test(src)) throw new Error("N2 the single note belongs in the header, with a title");
+		// Same rule for the incompatibility/drift notes: a duplicated status line is noise.
+		const warns = (src.match(/anchorNote !== null \?/g) || []).length;
+		if (warns !== 1) throw new Error("N2 anchorNote must have a single render branch, found " + warns);
+	}
+
 	// ── D2: two different durations must not share one unlabelled word ────────
 	// Cards showed a bare "103,686 ms" while the KPI is called "tool time". Summing the
 	// cards missed the KPI by 83 minutes — not because either was wrong, but because the
