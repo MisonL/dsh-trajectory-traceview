@@ -928,6 +928,28 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── D1: one bogus tool duration must not poison the totals ────────────────
+	// A real session reported 78,834,620 ms (21.9 h) for a 3-second bash call: when the
+	// log is reparsed, `callTime` can belong to a different pass and the subtraction
+	// spans the reload gap. That single value dominated the "tool time" KPI.
+	{
+		const mk = (callTime, time) => ({ eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "c1", name: "bash", argsRaw: "{}" }] },
+			{ kind: "tool-result", seq: 3, time, turn: 1, step: 1, callId: "c1", callTime, content: [], isError: false }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null });
+		const st = (snap) => deriveTraceTree(snap, t).stations.find((x) => x.kind === "step");
+		const cellDur = (snap) => { const x = st(snap); return x.cells.length > 0 ? x.cells[0].durationMs : null; };
+		if (cellDur(mk(1000, 4298)) !== 3298) throw new Error("D1 a normal duration must be kept, got " + cellDur(mk(1000, 4298)));
+		// The bogus reading is rejected, and the cell survives with a null duration: the
+		// tool still exists and must still be listed.
+		const bogus = st(mk(1000, 78835620));
+		if (bogus.cells.length !== 1) throw new Error("D1 the tool cell must survive a rejected duration");
+		if (bogus.cells[0].durationMs !== null) throw new Error("D1 an impossible duration must be null, got " + bogus.cells[0].durationMs);
+		// Zero and negative spans clamp to zero; only implausible values are rejected.
+		if (cellDur(mk(5000, 5000)) !== 0) throw new Error("D1 a zero span must stay zero");
+		if (cellDur(mk(9000, 1000)) !== 0) throw new Error("D1 a negative span must clamp to zero");
+	}
+
 	// ── P3: the playhead marks a position, it does not divide the strip ───────
 	// It used to be `top:40px; bottom:14px` — a 160px bar cutting between the cards
 	// and hanging ~36px below them. Users asked what the line was, which is the
