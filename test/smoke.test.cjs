@@ -928,6 +928,28 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── P3: the playhead marks a position, it does not divide the strip ───────
+	// It used to be `top:40px; bottom:14px` — a 160px bar cutting between the cards
+	// and hanging ~36px below them. Users asked what the line was, which is the
+	// definition of a decoration that does not communicate. A short marker with a
+	// caret pointing at the active card says the same thing unambiguously.
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		const rule = /\.dstv_playhead\{([^}]*)\}/.exec(src);
+		if (rule === null) throw new Error("P3 the playhead rule is missing");
+		const body = rule[1];
+		if (/bottom:/.test(body)) throw new Error("P3 the playhead must not stretch to the strip bottom");
+		if (!/height:14px/.test(body)) throw new Error("P3 the playhead must be a short marker");
+		if (/box-shadow:0 0 10px/.test(body)) throw new Error("P3 the old full-saturation glow made it look like a divider");
+		// The caret points DOWN at the card (it used to point up at nothing).
+		const caret = /\.dstv_playhead i\{([^}]*)\}/.exec(src);
+		if (caret === null) throw new Error("P3 the playhead caret is missing");
+		if (!/border-top:6px solid/.test(caret[1])) throw new Error("P3 the caret must point down at the active card");
+		if (/top:-7px/.test(caret[1])) throw new Error("P3 the caret must sit below the marker, not above it");
+		// Purely decorative: assistive tech must not announce it.
+		if (!/className: "dstv_playhead", "aria-hidden": "true"/.test(src)) throw new Error("P3 the playhead is decorative and must be aria-hidden");
+	}
+
 	// ── C1: composer must overlay, not sit below ──────────────────────────────
 	// A read-only replay surface should not leave a permanently open message box
 	// under it. The host keys its overlapping layout off `data-conversation-composer-overlay`
