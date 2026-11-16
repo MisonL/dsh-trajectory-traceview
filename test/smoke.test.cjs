@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -926,6 +926,46 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// `target !== 0` (which is always false for p/t anchors) stayed green.
 		if (!/target !== 0 \|\| parsed\.form === "p" \|\| parsed\.form === "t"/.test(src)) throw new Error("N1 turn anchors must enter the coverage check");
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
+	}
+
+	// ── F1: host form fields must not stay nameless ───────────────────────────
+	// DevTools audits the whole page. The host sidebar ships a session-search input
+	// with neither id nor name, so the console reports one violation on every load.
+	// We annotate it from inside the plugin — conservatively: id only, never name,
+	// and never touching a field that already has one.
+	{
+		const mk = (attrs) => {
+			const el = { id: attrs.id ?? "", tagName: attrs.tag ?? "INPUT", closest: () => attrs.inRoot ? {} : null,
+				getAttribute: (k) => (k === "name" ? (attrs.name ?? null) : k === "class" ? (attrs.cls ?? null) : null) };
+			return el;
+		};
+		const fields = [
+			mk({ cls: "bhn1Oq_searchInput" }),          // host: gets annotated
+			mk({ id: "host-owned", cls: "x" }),          // host already has an id: untouched
+			mk({ name: "already-named" }),               // has a name: untouched
+			mk({ cls: "dstv-search", inRoot: true })     // ours: never touched
+		];
+		const seen = [];
+		const fakeDoc = {
+			querySelectorAll: () => fields,
+			getElementById: (v) => (seen.includes(v) ? {} : null)
+		};
+		// The helper lives inside the vm context, so its `document` is the sandbox's —
+		// inject the fake there rather than on the outer global.
+		const savedDoc = sandbox.document;
+		sandbox.document = fakeDoc;
+		let touched = -1;
+		try { touched = annotateNamelessFormFields(); } catch (e) { throw new Error("F1 annotate threw: " + e.message); }
+		finally { sandbox.document = savedDoc; }
+		seen.length = 0;
+		if (touched !== 1) throw new Error("F1 exactly one field should be annotated, got " + touched);
+		if (fields[0].id !== "dsh-field-bhn1Oq_searchInput") throw new Error("F1 host field got id " + fields[0].id);
+		if (fields[0].getAttribute("name") !== null) throw new Error("F1 annotate must never set name (it changes form submission)");
+		if (fields[1].id !== "host-owned") throw new Error("F1 an existing id must be preserved");
+		if (fields[3].id !== "") throw new Error("F1 our own fields must be skipped");
+		// Wiring: the annotation has to actually run from the view.
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if ((src.match(/annotateNamelessFormFields\(\)/g) || []).length < 2) throw new Error("F1 the annotator must be called from the view effect");
 	}
 
 	// ── L1: loading must not be reported as empty ─────────────────────────────
