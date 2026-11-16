@@ -949,8 +949,12 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/@media \(prefers-reduced-motion: reduce\)\{\.dstv_root \*\{animation:none/.test(src)) throw new Error("L1 reduced motion must be able to stop the skeleton pulse");
 		// Card header: chips used to wrap inside the fixed 264px card, pushing the label
 		// onto a second line ("步骤 51" split across two rows).
-		if (!/\.dstv_chips\{[^}]*flex-wrap:nowrap/.test(src)) throw new Error("L2 card chips must stay on one line");
-		if (!/\.dstv_nameText\{min-width:0;overflow:hidden;text-overflow:ellipsis\}/.test(src)) throw new Error("L2 the step label must be able to ellipsize instead of wrapping");
+		if (!/\.dstv_chips\{[^}]*flex-wrap:wrap/.test(src)) throw new Error("L2 card chips must be able to move to their own row");
+		// The label must never shrink: squeezing it was the original defect (label split
+		// across two rows), and ellipsizing it is just as bad ("步骤 …" hides the number
+		// that identifies the step). Chips yield instead, as a whole row.
+		if (!/\.dstv_nameText\{flex:0 0 auto;white-space:nowrap\}/.test(src)) throw new Error("L2 the step label must not shrink or ellipsize");
+		if (!/\.dstv_name\{[^}]*flex-wrap:wrap/.test(src)) throw new Error("L2 the card head must be able to wrap as a whole");
 	}
 
 	// ── M2: markdown fences must survive backtick-heavy content ───────────────
