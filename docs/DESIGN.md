@@ -2008,3 +2008,39 @@ const css = [
 S1 新增两条：① CSS 必须是 `[].join("")` 形式，禁止 `+` 链；② 窄屏媒体块的位置必须在 `.dstv_head{position:sticky`、`.dstv_legend{display:inline-flex`、`.dstv_searchInput{width:150px` 之后。变异（把块移回开头）→ 红：`the narrow-viewport block must come after .dstv_head… or the cascade swallows it`。
 
 **教训补一条**：CSS 的"存在性"和"生效性"是两件事。断言了规则在样式表里，只能证明它被写进去了；它是否真的赢下级联，必须断言**顺序**，或者实测计算样式。
+
+### 12.37 输入框缺 id/name：aria-label 解决不了浏览器的表单检查（2026-11-16）
+
+用户截图里的 DevTools 提示：
+
+> A form field element should have an id or name attribute — This might stop the browser from correctly autofilling the form.（3 项资源）
+
+提示是真的。§12.32 我给两个输入框加了 `aria-label`，解决了**读屏名称**，但没解决**浏览器表单检查**：后者看的是 `id` / `name`，与 `aria-label` 是两套东西。
+
+修复（两个框都补）：
+
+| 框 | id | name | type | autocomplete |
+|---|---|---|---|---|
+| 锚点 | `dstv-anchor-input` | `dstv-anchor` | `text` | `off` |
+| 搜索 | `dstv-search-input` | `dstv-search` | `search` | `off` |
+
+`type="search"` 让搜索框拿到浏览器原生语义（清除按钮、`Esc` 行为）；`autoComplete="off"` 是因为这两个框不是用户身份/地址之类的自动填充目标，显式声明比让浏览器猜好。
+
+#### 真机核对（React 里 id/name 容易被吞）
+
+| 项 | 实测 |
+|---|---|
+| 插件内输入元素数 | **2** |
+| 锚点框 | `id=dstv-anchor-input`、`name=dstv-anchor`、`type=text`、`aria-label` 在、`autocomplete=off` |
+| 搜索框 | `id=dstv-search-input`、`name=dstv-search`、`type=search`、`aria-label` 在、`autocomplete=off` |
+| 页面剩余无名输入元素 | 2 个，均 `insidePlugin: false` —— 宿主的侧栏「搜索会话名称」与一个 `type=file` 上传控件，不属于本插件 |
+
+#### 顺带核查
+
+插件里另一处 `textarea` 是剪贴板 fallback（`document.createElement` 临时元素，用完立刻 `removeChild`），不会留下无名表单元素。
+
+#### 守卫
+
+A1 新增：两个框必须分别带指定 `id` 与 `name`，且必须显式 `autoComplete="off"`。变异（删掉搜索框 `id`）→ 红：`A1 input dstv-search-input needs an id`。
+
+**教训**：无障碍是两套评分体系——`aria-label` 管读屏名称，`id`/`name` 管浏览器表单语义与自动填充。只做前者，审计工具依然会报。

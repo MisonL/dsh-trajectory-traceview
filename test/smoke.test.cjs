@@ -1067,6 +1067,14 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (/dstv_station:focus\{outline:none\}/.test(src)) throw new Error("A1 the focus ring must not be suppressed");
 		const labelCount = (src.match(/"aria-label": t\("(?:anchor\.jumpLabel|search\.label)"\)/g) || []).length;
 		if (labelCount !== 2) throw new Error("A1 both inputs need an accessible name, found " + labelCount);
+		// aria-label satisfies the a11y name computation but not the browser's form-field
+		// checks: DevTools flags a field without id/name ("A form field element should have
+		// an id or name attribute"), which also breaks autofill heuristics.
+		for (const [id, name] of [["dstv-anchor-input", "dstv-anchor"], ["dstv-search-input", "dstv-search"]]) {
+			if (!new RegExp('id: "' + id + '"').test(src)) throw new Error("A1 input " + id + " needs an id");
+			if (!new RegExp('name: "' + name + '"').test(src)) throw new Error("A1 input " + name + " needs a name");
+		}
+		if (!/autoComplete: "off"/.test(src)) throw new Error("A1 these are not autofill targets, opt out explicitly");
 
 		// And the label builder itself has to produce something usable.
 		const label = stationAriaLabel({ kind: "step", stepNo: 3, turn: 2, meta: ["4工具"], hasError: false }, 7, 66, t);
