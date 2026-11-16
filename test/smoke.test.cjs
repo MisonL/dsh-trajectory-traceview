@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -926,6 +926,44 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// `target !== 0` (which is always false for p/t anchors) stayed green.
 		if (!/target !== 0 \|\| parsed\.form === "p" \|\| parsed\.form === "t"/.test(src)) throw new Error("N1 turn anchors must enter the coverage check");
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
+	}
+
+	// ── MD1: assistant bodies are Markdown, not source ────────────────────────
+	// The detail panel used to print raw source (`**0.9.13**`, `# heading`, fences),
+	// because the container carried white-space:pre-wrap and nothing parsed it.
+	{
+		const b = mdBlocks("找到原因：版本 **0.9.13**，提交 `a3a7a33`。\n\n## 标题\n\n- 一\n- 二\n\n1. 甲\n2. 乙\n\n```js\nconst a = 1;\n```\n\n> 引用\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n---");
+		const types = b.map((x) => x.type + (x.level ?? ""));
+		const want = ["p", "h2", "ul", "ol", "code", "quote", "table", "hr"];
+		if (types.join(",") !== want.join(",")) throw new Error("MD1 block kinds = " + types.join(","));
+		if (b[0].text !== "找到原因：版本 **0.9.13**，提交 `a3a7a33`。") throw new Error("MD1 block text must stay raw for the inline pass");
+		const inline = mdInline(b[0].text);
+		const kinds = inline.map((p) => p.t).join(",");
+		if (kinds !== "text,strong,text,code,text") throw new Error("MD1 inline kinds = " + kinds);
+		if (inline[1].text !== "0.9.13" || inline[3].text !== "a3a7a33") throw new Error("MD1 inline payloads wrong");
+		if (b[4].lang !== "js" || b[4].text !== "const a = 1;") throw new Error("MD1 fenced code mis-parsed");
+		if (b[6].head.join("|") !== "A|B" || b[6].rows[0].join("|") !== "1|2") throw new Error("MD1 table mis-parsed");
+		// A longer fence must swallow shorter runs (the export fix in §12.39, parser side).
+		const nested = mdBlocks("````\na\n```\nb\n````");
+		if (nested.length !== 1 || nested[0].type !== "code" || nested[0].text !== "a\n```\nb") throw new Error("MD1 longer fence must contain short runs");
+		if (markdownToPlain("版本 **0.9.13**") !== "版本 0.9.13") throw new Error("MD1 plain preview must strip markers");
+		// Parsing must never produce HTML strings: rendering is element-based, so model
+		// output cannot become markup.
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		// Only real code counts: this very file explains "no innerHTML" in a comment, and a
+		// naive regex matches that prose instead of a violation.
+		const codeOnly = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+		if (/dangerouslySetInnerHTML\s*[:=]/.test(codeOnly)) throw new Error("MD1 markdown must be built from elements, never HTML strings");
+		if (/\.innerHTML\s*=/.test(codeOnly)) throw new Error("MD1 markdown must never be assigned via innerHTML");
+		if (!/\.dstv_dMarkdown\{white-space:normal\}/.test(src)) throw new Error("MD1 the markdown container must not keep pre-wrap");
+		if (!/\.dstv_mdFence\{/.test(src) || !/\.dstv_mdTable\{/.test(src)) throw new Error("MD1 markdown block styles are required");
+		// The detail panel must render through the component, not the raw string.
+		if (!/jsx\(MarkdownText, \{ text: cell\.text \}/.test(src)) throw new Error("MD1 the detail panel must render Markdown");
+		// `jsx(type, props, key)` takes the third argument as the KEY, not children.
+		// Passing the node list there renders an empty container that no shape assertion
+		// notices — it took a live measurement to catch. Pin the children prop instead.
+		if (/jsx\("div", \{ className: "dstv_md" \}, nodes\)/.test(src)) throw new Error("MD2 nodes belong in props.children, not the key argument");
+		if (!/className: "dstv_md", children: nodes/.test(src)) throw new Error("MD2 the markdown root must receive its nodes as children");
 	}
 
 	// ── F1: host form fields must not stay nameless ───────────────────────────

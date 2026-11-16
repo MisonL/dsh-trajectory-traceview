@@ -2385,3 +2385,63 @@ NAMELESS_ZERO=true
 #### 六、教训（本会话第三次同类）
 
 "断言了代码形状" ≠ "断言了代码会执行"。前两次分别是：`anchorLoadTarget` 只断言调用不断言条件、§12.42 区域存在但时机不对。**凡是"某段代码存在"的断言，都要问一句：如果把它变成死代码，这条断言还会绿吗？**
+
+### 12.44 详情面板的助手正文：从"打印源码"到真正渲染 Markdown（2026-11-16）
+
+用户指出：详情面板里的助手正文**没有样式**——`**0.9.13**`、`# 之前没修掉的原因`、三反引号全部按字面打印。
+
+#### 一、根因
+
+```css
+.dstv_dText{font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+```
+
+`white-space:pre-wrap` + 直接把 `cell.text` 塞进 `div` 的 `children`——于是渲染的不是正文，是**源码**。
+
+宿主对话区用自己的 `AssistantMarkdown`，但它需要 `loadImage`、`usePresentation`、`renderSlot`、`useDisclosure` 等十来个内部服务，插件拿不到，无法复用。所以只能自己实现。
+
+#### 二、实现：解析与渲染分离
+
+**解析层**（放在 pure helpers 区，可单测）：
+
+- `mdInline(src)` → `[{t:"text"|"code"|"strong"|"link", …}]`
+- `mdBlocks(src)` → `[{type:"h"|"p"|"code"|"ul"|"ol"|"quote"|"table"|"hr", …}]`
+- `markdownToPlain(src)` → 去掉标记的纯文本，供卡片两行摘要用
+
+刻意做成**浅层**：不处理嵌套强调、HTML 块、引用式链接。不认识的语法退化成字面文本——**这比猜错好**。
+
+**渲染层**：`MarkdownText({text})` 用 `jsx`/`jsxs` 构建元素。
+
+**安全性**：全程不出现 `innerHTML` / `dangerouslySetInnerHTML`，模型输出**不可能**变成标记；外链带 `rel="noreferrer noopener"`。这条有断言守着（且断言会先剥掉注释——第一版被我自己解释"no innerHTML"的注释误伤了）。
+
+#### 三、差点交付一个空壳
+
+第一次真机验证：`.dstv_md` 容器存在，但 `textContent` 长度是 **0**。
+
+原因是我把节点数组传成了 `jsx` 的**第三个参数**：
+
+```js
+return jsx("div", { className: "dstv_md" }, nodes);   // ← nodes 被当成 key
+```
+
+`jsx(type, props, key)` —— 第三个位置是 key，不是 children。于是渲染出一个空 div。
+
+**这个 bug 所有单元测试都是绿的**：解析器测试全过、样式断言全过、`MD1` 全部满足。只有真机量 `textContent.length` 才暴露。补了 MD2 断言（禁止把 nodes 传在 key 位置 + 必须走 `children`），变异验证变红。
+
+#### 四、真机结果
+
+| 指标 | 结果 |
+|---|---|
+| 详情面板正文长度 | 93 字符（非空） |
+| 生成元素 | `p`×2、`code`×2、`strong`×1 |
+| 字面 `**` 残留 | **0** |
+| 字面 `#` 标题残留 | 无 |
+| 字面三反引号残留 | 无 |
+
+#### 五、顺带
+
+卡片的两行摘要改用 `markdownToPlain()`，否则预览里会看到 `**粗体**`。卡片是"扫读"用的，标记符号在那里的信息价值为零。
+
+#### 六、教训
+
+**"单测绿"≠"渲染对"。** 纯函数的输出结构可以对，而把它交给视图的那一步（参数位置、props 名）仍然可能是错的。凡是"数据 → 组件"的接缝，必须有真机断言兜住；本项目里这条接缝已经连着坏了三次（§12.35 CSS 拼接、§12.43 死代码、本条）。
