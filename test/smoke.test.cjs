@@ -928,6 +928,31 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── L1: loading must not be reported as empty ─────────────────────────────
+	// Regression guard for a false statement the user actually saw: on a cold open the
+	// view rendered "no trajectory data yet" for a second or two while the session log
+	// was still being read. The host exposes `openState: "loading" | "open" | "error"`,
+	// so "still loading" and "genuinely empty" must render differently.
+	{
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/useSession\(\(s\) => s\.openState === "loading"\)/.test(src)) throw new Error("L1 the view must read the session's openState");
+		// The loading branch has to be decided BEFORE the incompatible/empty branches,
+		// otherwise the empty copy wins during load.
+		const iLoad = src.indexOf('if (sessionLoading === true) {');
+		const iEmpty = src.indexOf('const structureBroken = tree.contract != null');
+		if (iLoad < 0) throw new Error("L1 a loading branch must exist");
+		if (!(iLoad < iEmpty)) throw new Error("L1 the loading branch must precede the empty/incompatible branch");
+		// It must be a skeleton with a live status, not prose that guesses a count.
+		if (!/role: "status"/.test(src) || !/"aria-busy": "true"/.test(src)) throw new Error("L1 the loading state must announce itself politely");
+		if (!/dstv_skeletonRow/.test(src) || !/\.dstv_skeleton\{/.test(src)) throw new Error("L1 the loading state needs skeleton cards");
+		// And it must be covered by the reduced-motion rule rather than animating forever.
+		if (!/@media \(prefers-reduced-motion: reduce\)\{\.dstv_root \*\{animation:none/.test(src)) throw new Error("L1 reduced motion must be able to stop the skeleton pulse");
+		// Card header: chips used to wrap inside the fixed 264px card, pushing the label
+		// onto a second line ("步骤 51" split across two rows).
+		if (!/\.dstv_chips\{[^}]*flex-wrap:nowrap/.test(src)) throw new Error("L2 card chips must stay on one line");
+		if (!/\.dstv_nameText\{min-width:0;overflow:hidden;text-overflow:ellipsis\}/.test(src)) throw new Error("L2 the step label must be able to ellipsize instead of wrapping");
+	}
+
 	// ── M2: markdown fences must survive backtick-heavy content ───────────────
 	// Tool results routinely ARE code (a README, a diff). A fixed ``` fence closes
 	// early on such content and the rest of the export renders as garbage headings.

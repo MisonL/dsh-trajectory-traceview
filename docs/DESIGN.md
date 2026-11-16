@@ -2147,3 +2147,80 @@ npm i
 | 端到端 | 工具结果是 README 的会话，导出里内层 ```bash 必须落在 4 反引号围栏**内部** |
 
 两个变异（固定三反引号 / 不扫描内容）均变红：`a 3-backtick run inside must promote the fence to 4`。
+
+### 12.40 用户报的三件事：加载态误报、控制台报错、步骤卡换行（2026-11-16）
+
+用户附了两张截图，指出三个问题。逐条核查结果：**两条是真问题，一条不是我们的**。
+
+#### 一、冷启动把"正在加载"说成"暂无数据"（真问题）
+
+截图一：刚点进轨迹视图时显示 `◉ 暂无轨迹数据 / 发送消息后，这里会以横向时间轴展示…`，而会话里明明有 90+ 步。
+
+根因：视图只判断 `N === 0`（站点数为 0）就落到"空态"分支，把**未就绪**和**确实为空**混为一谈。冷启动时会话日志还在读，快照是空的，于是渲染出一句对用户而言**是假话**的文案。
+
+宿主其实给了准确信号。`dsh-api-session-controller` 的会话快照带 `openState: "loading" | "open" | "error"`，宿主自己的视图就在用：
+
+```js
+useSession(snapshot => snapshot.openState === `loading`)
+```
+
+修复：读取该信号，在空态之前插一个加载分支——**骨架卡 + 旋转指示 + `role="status"` / `aria-live="polite"` / `aria-busy="true"`**，而不是猜测数字或用散文。三点考虑：
+
+1. 用骨架而不是文字，是因为此刻**卡片数未知**，写任何数字都是编的
+2. 骨架尺寸与真卡片同一量级，数据到达时布局不跳
+3. 动画走 `animation`，被已有的 `prefers-reduced-motion` 全局规则自动关掉，不需要额外分支
+
+真机验证（打开会话 → 切到轨迹视图 → 刷新页面）：
+
+```
+t=2719ms  root=true skeleton=3 spinner=1 loadingText="正在读取会话轨迹…" busy=true cards=0
+t=3006ms  root=true skeleton=0 cards=69
+SAW_SKELETON=true  SAW_EMPTY_WHILE_LOADING=false
+```
+
+骨架在 287ms 后被 69 张真卡片替换，整个过程没有出现"暂无轨迹数据"。
+
+#### 二、"步骤 51" 卡片标题折成两行（真问题）
+
+截图二：「步骤 51」被拆成两行——"步骤"在第一行、"51" 在第二行。
+
+根因：`s.label` 是 `dstv_name` 里的**裸文本节点**，与三枚 chip 挤在同一行。`dstv_chips` 用了 `flex-wrap:wrap`，卡片固定 264px 宽放不下，于是整行**换行**，标签被切成两段。
+
+修复：
+
+- `.dstv_chips` 改 `flex-wrap:nowrap` + `min-width:0;overflow:hidden`
+- `.dstv_name` 改 `flex-wrap:nowrap;white-space:nowrap;overflow:hidden`
+- 标签包一层 `.dstv_nameText{min-width:0;overflow:hidden;text-overflow:ellipsis}`（裸文本节点无法省略）
+- `.dstv_chip` 加 `min-width:0;text-overflow:ellipsis`，并给每枚 chip 加 `title` 保留完整值
+
+真机测量：61 张卡片的 `.dstv_name` 高度**统一 16px**（此前会出现 0/16/32 混合，即折行）。溢出改为省略号，完整内容在 `title` 里。
+
+#### 三、控制台 "A form field element should have an id or name attribute"（不是我们的）
+
+0.9.8 修完两个输入框后，报错从 **3 项降到 1 项**。真机枚举页面剩余的无名可见表单元素，只有一个：
+
+```html
+<input class="bhn1Oq_searchInput" type="text" placeholder="搜索会话名称" maxlength="500" tabindex="-1" value="">
+```
+
+`inPlugin: false` —— 这是宿主侧栏的会话搜索框，位于 `bhn1Oq_search` 容器内。本插件无法也不应修改宿主代码。另一个 `input[type=file]` 是隐藏的，DevTools 不审计。
+
+**结论：插件侧已清零。**
+
+#### 四、守卫
+
+| 断言 | 内容 |
+|---|---|
+| L1-a | 必须读取 `openState === "loading"` |
+| L1-b | 加载分支必须**排在**空态/不兼容分支之前（否则空态文案会赢） |
+| L1-c | 必须有 `role="status"` 与 `aria-busy="true"` |
+| L1-d | 必须有骨架卡 `.dstv_skeleton` / `.dstv_skeletonRow` |
+| L1-e | 必须能被 reduced-motion 规则关掉动画 |
+| L2-a | `.dstv_chips` 必须 `flex-wrap:nowrap` |
+| L2-b | 必须有可省略的 `.dstv_nameText` |
+
+变异：把加载分支改成 `if (false)` → 红（`L1 a loading branch must exist`）；把 chips 改回 `flex-wrap:wrap` → 红（`L2 card chips must stay on one line`）。
+
+#### 五、插曲：这次改 CSS 我又漏了两次逗号
+
+新增 7 条 CSS 时，我两次漏写数组成员后的逗号。第二次 S1 守卫直接报 `SyntaxError: Unexpected string`——**这正是把 `+` 串改成数组 join 想要的效果**：错得响亮，而不是像 0.9.0–0.9.5 那样静默截断、页面变纯文本。
