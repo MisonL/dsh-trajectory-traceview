@@ -1000,6 +1000,27 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (enterBranch === null) throw new Error("X1-k the typed anchor jump must mirror into the URL");
 		if (!/nextHashFor\(location\.hash, wanted\)/.test(enterBranch[1])) throw new Error("X1-k the URL must be derived from the jumped anchor");
 
+		// X1-m: the selection pin only works if station ids are STABLE. They used to be
+		// `s${stepCounter}` — a window-wide running count — so prepending history
+		// renumbered every step and the pin resolved to a different record.
+		{
+			const mkSt = (nodes) => deriveTraceTree({ eventNodes: nodes, requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t).stations;
+			const cur = [];
+			for (let i = 0; i < 20; i += 1) cur.push({ kind: "assistant", seq: 100 + i * 10, time: 100 + i * 10, turn: 2, step: i + 1, messageId: "c" + i, blocks: [{ kind: "text", text: "cur" + i }] });
+			const before = mkSt(cur);
+			const selIdx = 12;
+			const selId = before[selIdx].id;
+			const older = [];
+			for (let i = 0; i < 5; i += 1) older.push({ kind: "assistant", seq: 1 + i * 10, time: 1 + i * 10, turn: 1, step: i + 1, messageId: "o" + i, blocks: [{ kind: "text", text: "old" + i }] });
+			const after = mkSt(older.concat(cur));
+			const pinned = after.findIndex((x) => x.id === selId);
+			if (pinned < 0) throw new Error("X1-m the selected station id vanished after prepending history");
+			if (after[pinned].id !== selId) throw new Error("X1-m the pin resolved to a different station");
+			// The old positional read must now be recognisably WRONG, which is the whole
+			// point: if position and identity agreed, this test would prove nothing.
+			if (after[selIdx].id === selId) throw new Error("X1-m position and identity must diverge after a prepend, or the test is vacuous");
+		}
+
 		// X1-l: regressions from round 2 of the Codex audit.
 		{
 			// R3: `array.map(subDetailOf)` passes the INDEX as the second argument, which
