@@ -805,6 +805,12 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (fmtTokens(16300000000) !== "16.3B") throw new Error("TOK 1.63e10 must read as B, got " + fmtTokens(16300000000));
 	if (fmtTokens(999950000) !== "1.0B") throw new Error("TOK 999,950,000 must promote to B, got " + fmtTokens(999950000));
 	if (fmtTokens(999949999) !== "999.9M") throw new Error("TOK 999,949,999 must stay in M, got " + fmtTokens(999949999));
+	// The same carry rule at the k/M seam: 999,999 rounds to 1000, which must become
+	// "1.0M" — "1000k" is a four-digit mantissa that reads as an error.
+	if (fmtTokens(999999) !== "1.0M") throw new Error("TOK 999,999 must carry into M, got " + fmtTokens(999999));
+	if (fmtTokens(999499) !== "999k") throw new Error("TOK 999,499 must stay in k, got " + fmtTokens(999499));
+	if (fmtTokens(9949) !== "9.9k") throw new Error("TOK 9,949 keeps one decimal, got " + fmtTokens(9949));
+	if (fmtTokens(9950) !== "10k") throw new Error("TOK 9,950 rounds up to 10k, got " + fmtTokens(9950));
 
 	// ── §8.9 窗口边界：missing timing must never render as 0 or NaN ──────────
 	// Window-edge steps routinely lack stepStartTime / completedTime; the three
@@ -960,8 +966,14 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const meta = step.meta.join(" | ");
 		// The sandbox's `t` is the identity, so the chips carry the raw keys here; what
 		// matters is that the two chips use DIFFERENT labels and each carries its value.
-		if (!/meta\.stepDur 8,000 ms/.test(meta)) throw new Error("D2 the step chip must carry its own label and value, got: " + meta);
-		if (!/meta\.toolDur 2,000 ms/.test(meta)) throw new Error("D2 the tool chip must carry its own label and value, got: " + meta);
+		// Cards are scanning surfaces: they share the KPI's human unit ("8.0 s"), not
+		// raw milliseconds. Exact ms still lives in the detail panel via fmtMs.
+		if (!/meta\.stepDur 8\.0 s/.test(meta)) throw new Error("D2 the step chip must carry its own label and value, got: " + meta);
+		if (!/meta\.toolDur 2\.0 s/.test(meta)) throw new Error("D2 the tool chip must carry its own label and value, got: " + meta);
+		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (/meta\.stepDur.*fmtMs\(stepDurMs\)/.test(src)) throw new Error("D2 card chips must not use raw milliseconds");
+		// The detail panel keeps the precise reading for anyone who needs it.
+		if (!/className: "dstv_dur"|fmtMs\(/.test(src)) throw new Error("D2 exact durations must still be available in detail");
 	}
 
 	// ── D1: one bogus tool duration must not poison the totals ────────────────
