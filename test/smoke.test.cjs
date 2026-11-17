@@ -19,7 +19,7 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
@@ -932,6 +932,76 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// `target !== 0` (which is always false for p/t anchors) stayed green.
 		if (!/target !== 0 \|\| parsed\.form === "p" \|\| parsed\.form === "t"/.test(src)) throw new Error("N1 turn anchors must enter the coverage check");
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
+	}
+
+	// ── X1: Codex review findings, each re-proven against the real code ───────
+	{
+		// X1-a: a host `user` node has no `turn`, so it must be adopted by the next
+		// assistant's turn. Borrowing `partial.turn` filed every historical user message
+		// under the turn being generated right now.
+		const snapP = { eventNodes: [
+			{ kind: "user", seq: 1, time: 1, blocks: [{ kind: "text", text: "OLD_USER" }] },
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "OLD_REPLY" }] },
+			{ kind: "user", seq: 10, time: 10, blocks: [{ kind: "text", text: "NEW_USER" }] }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: { turn: 2, step: 1, blocks: [{ kind: "text", text: "LIVE" }], timing: {} } };
+		const withP = deriveTraceTree(snapP, t).stations.filter((x) => x.kind === "step").map((x) => x.turn);
+		if (withP.join(",") !== "1,2") throw new Error("X1-a turns must stay 1,2 with a partial, got " + withP.join(","));
+
+		// X1-b: a fence after a list must not be swallowed as a list continuation.
+		const md = mdBlocks("- Intro\n```js\nconst x=1\n```\n# Heading");
+		if (md.map((x) => x.type).join(",") !== "ul,code,h") throw new Error("X1-b fence after list lost, got " + md.map((x) => x.type).join(","));
+		if (md[1].lang !== "js" || md[1].text !== "const x=1") throw new Error("X1-b fence content wrong");
+		// ...while genuine lazy continuations still join their item.
+		const lazy = mdBlocks("- a\n  continued\n- b");
+		if (lazy[0].items[0].join("|") !== "a|continued") throw new Error("X1-b lazy continuation must still join");
+
+		// X1-c: an ordered list keeps its starting number.
+		const ol = mdBlocks("7. Resume\n8. Verify");
+		if (ol[0].type !== "ol" || ol[0].start !== 7) throw new Error("X1-c ordered start lost, got " + JSON.stringify(ol[0]));
+
+		// X1-d: anchors are per-turn. `stepNo` is a window-wide counter, so turn 2's first
+		// step was number 3 and `tvp1:t2s1` never resolved.
+		const tree7 = deriveTraceTree({ eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "a" }] },
+			{ kind: "assistant", seq: 3, time: 3, turn: 1, step: 2, messageId: "m2", blocks: [{ kind: "text", text: "b" }] },
+			{ kind: "assistant", seq: 5, time: 5, turn: 2, step: 1, messageId: "m3", blocks: [{ kind: "text", text: "c" }] }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+		const st7 = tree7.stations.filter((x) => x.kind === "step");
+		if (st7[2].stepNo !== 3) throw new Error("X1-d stepNo must remain the window counter");
+		if (st7[2].turnStep !== 1) throw new Error("X1-d turnStep must be per-turn, got " + st7[2].turnStep);
+		if (resolveAnchorInStations(parseAnchor("tvp1:t2s1"), st7).ok !== true) throw new Error("X1-d tvp1:t2s1 must resolve");
+		if (resolveAnchorInStations(parseAnchor("tvp1:t2s2"), st7).ok !== false) throw new Error("X1-d tvp1:t2s2 must not resolve");
+
+		// X1-f: streaming reasoning must survive a tool cell already in the step. Tool
+		// cells carry no `thinking`, and `undefined !== ""` made the old guard treat the
+		// reasoning as already-present and drop it. The tool call must come FIRST for the
+		// guard to see it — a tool cell added later does not reproduce.
+		const treeR = deriveTraceTree({ eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "t1", name: "bash", argsRaw: "{}" }] }
+		], requests: [], callSchemas: {}, runningCalls: {},
+			partial: { turn: 1, step: 1, blocks: [{ kind: "reasoning", text: "REASONING_VISIBLE" }], timing: {} } }, t);
+		const liveR = treeR.stations.filter((x) => x.kind === "step").pop();
+		if (!liveR.cells.some((c) => c.thinking === "REASONING_VISIBLE")) throw new Error("X1-f streaming reasoning was dropped when a tool cell already exists");
+
+		// X1-g: the in-flight reply's `timing` must be used, not reported as missing.
+		const treeT = deriveTraceTree({ eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "a" }] }
+		], requests: [], callSchemas: {}, runningCalls: {},
+			partial: { turn: 2, step: 1, blocks: [{ kind: "text", text: "LIVE" }], timing: { stepStartTime: 1000, firstTokenTime: 1200 } } }, t);
+		const liveT = treeT.stations.filter((x) => x.kind === "step").pop();
+		if (liveT.startMs !== 1000) throw new Error("X1-g partial stepStartTime must be kept, got " + liveT.startMs);
+		if (liveT.ttftMs !== 200) throw new Error("X1-g partial TTFT must be derived, got " + liveT.ttftMs);
+		if (liveT.timingRecorded !== true) throw new Error("X1-g partial timing must count as recorded");
+		// No completion boundary yet: the duration must stay unknown, not be invented.
+		if (liveT.endMs !== null) throw new Error("X1-g a still-streaming step must not have an end");
+
+		// X1-e: a `c` alias must find an orphan tool result, which is its own station.
+		const tree11 = deriveTraceTree({ eventNodes: [
+			{ kind: "tool-result", seq: 20, time: 20, callId: "ORPHAN", call: null, content: [{ type: "text", text: "out" }], isError: false }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+		const hitC = resolveAnchorInStations(parseAnchor("tvp1:cORPHAN"), tree11.stations);
+		if (hitC.ok !== true || hitC.station.kind !== "orphan-tool") throw new Error("X1-e c-alias must find the orphan tool");
+		if (resolveAnchorInStations(parseAnchor("tvp1:cNOPE"), tree11.stations).ok !== false) throw new Error("X1-e an unknown callId must not resolve");
 	}
 
 	// ── N2: status notes render once, not twice ──────────────────────────────

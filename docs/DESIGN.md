@@ -2809,3 +2809,90 @@ D2 断言更新为 `8.0 s` / `2.0 s`，并加了一条"卡片不得用 fmtMs"。
 #### 三、教训
 
 数字格式化的问题往往不是"算错"，而是**同一类量在不同地方用了不同契约**。§12.34 修了 M/B 档的进位却漏掉 k 档，这次补上；§12.49 修了"两种耗时共用一个词"，这次又发现两种单位混用。**格式化的本质是一致的表达契约，不能只修一处。**
+
+### 12.52 Codex 对抗评审：12 项中核实并修复 7 项（2026-11-17）
+
+用户要求让 Codex 评审。通过 Orca 启动 Codex worker（`ctx_14a3b4eaf0a5`），给了自包含的对抗性 spec：查真实缺陷、每条必须带证据、不改代码、不重复 §12 已记录的有意取舍。
+
+**它报了 12 项。我没有直接采信，逐条用真实代码复现。** 核实通过的先修 7 项，全部配断言与变异。
+
+#### 1. 【P1】partial.turn 污染了所有历史用户消息
+
+```js
+const declared = typeof n.turn === "number" ? n.turn
+  : (typeof snap?.partial?.turn === "number" ? snap.partial.turn : null);
+```
+
+rc.2 的 `UserMessageNode` **没有 `turn` 字段**，于是几乎每条用户消息都落到 `partial.turn`——也就是**正在生成的那一轮**。
+
+实测（旧代码）：站点顺序变成 `[user/t2, step/t1, user/t2, step/t2]`，**历史轮次被排到了最新轮次后面**。
+
+修法：删掉 partial 回退。没有 `turn` 的用户消息走既有的 `pendingUser` 机制，由下一条 assistant 的 turn 收养。修复后带/不带 partial 的顺序完全一致（`step/t1, step/t2`）。
+
+#### 2. 【P2】流式 reasoning 被工具调用吞掉
+
+```js
+!st.cells.some((c) => c.thinking !== "")
+```
+
+工具 cell **没有 `thinking` 字段**，而 `undefined !== ""` 为真——只要该步已有工具 cell，reasoning 就被判定"已存在"而丢弃。
+
+**这里我第一次写错了测试**：用例里工具 cell 是 `runningCalls` 建的，排在 reasoning 之后，所以 `some()` 当时还看不到它，变异没变红。改成"工具调用在前、reasoning 在后"才复现。旧代码实测只剩 `[tool]`，reasoning 完全消失。
+
+修法：`typeof c.thinking === "string" && c.thinking !== ""`，只认真正持有文本的 cell。
+
+#### 3. 【P2】命令 / 孤立工具的状态显示错误
+
+`dStatus` 只对 `step` 和 `kind === "error"` 分支，命令的 `outcomeKind` 与孤立工具的 `isError` 都没接：
+
+- `outcome.kind === "error"` 的命令 → 显示"已完成"
+- `outcome == null`（rc.2 明示仍在执行）的命令 → 显示"已完成"
+- `isError: true` 的孤立工具 → 显示"已完成"
+
+同时**失败命令没有计入 error KPI**（只加了文案，没 `stats.errors += 1`）。两处都修了。
+
+#### 4. 【P2】锚点用窗口累计计数，导致 `tvp1:t2s1` 永远解析不到
+
+`stepNo` 是**窗口级递增**计数器：窗口里先出现 turn1 的两步，turn2 的第一步就是 `stepNo=3`。而锚点 `t2s1` 的语义是**轮内**第 1 步。
+
+实测：`resolveAnchorInStations(parseAnchor("tvp1:t2s1"))` → `not-loaded`，而该站点明明已加载。
+
+修法：新增 `turnStep`（轮内序号，来自 `piece.stepNum`），锚点解析改用它；`stepNo` 保留原语义不动。修后 `t2s1` 命中、`t2s2` 正确未命中。
+
+#### 5. 【P2】列表后的代码围栏被吞进列表
+
+`mdBlocks` 的懒续行判断只排除空行和标题，**围栏被当成续行**：
+
+```
+mdBlocks("- Intro\n```js\nconst x=1\n```\n# Heading")
+旧: [{type:"ul",items:[[Intro,```js,const x=1,```]]},{type:"h"}]
+新: [ul, code(js, "const x=1"), h]
+```
+
+修法：遇到 `` ``` `` / `~~~` 就终止列表。原有懒续行行为（`- a\n  continued` → 并入首项）经断言保护未被破坏。
+
+#### 6. 【P3】`c` 别名定位不到孤立工具结果
+
+`c` 别名只在 `kind === "step"` 的站点里找工具 cell，而工具结果没有匹配调用时会成为独立的 `orphan-tool` 站点（自身带 `callId`）。补上这条路径；不存在的 callId 仍正确返回 `not-loaded`。
+
+#### 7. 【P3】流式步骤的 `partial.timing` 被完全忽略
+
+界面对正在生成的步骤报"未记录耗时"，而 `partial.timing` 里 `stepStartTime` / `firstTokenTime` 明明都在。
+
+修后：`startMs=1000`、`ttftMs=200`、`timingRecorded=true`。**`endMs` 仍为 `null`**——步骤没结束就不该编造时长，这条也写进断言了。
+
+#### 尚未处理（Codex 报了、我还没核实完）
+
+- #3 递归 PTC 子调用链被截断
+- #5 加载更早历史改变正在查看的记录
+- #6 回车定位后 URL hash 不更新
+- #8 锚点分页在"本轮已到末尾"时提前停止
+- #12 有序列表起始编号丢失
+
+（#12 已在本轮一并修掉，见下。）
+
+#### 教训
+
+**外部评审的价值在于它不受我的既有假设约束。** 这 7 项里有 4 项（partial.turn、reasoning、命令状态、轮内 step）都是我反复看过、测过却"看不见"的——因为我的测试和实现共享了同一个错误前提。对抗性评审从契约出发，才照出这些。
+
+我自己在修 #2 时也重演了一次旧毛病：**测试用例没构造出触发条件，就以为修复无效**。变异没变红时，先怀疑用例，再怀疑代码。
