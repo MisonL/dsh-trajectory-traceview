@@ -3117,3 +3117,76 @@ if (after[selIdx].id === selId) throw new Error("position and identity must dive
 宿主重启后，`/Users/mison/Documents/New project` 下所有会话点击后都显示"重试"，会话列表有时完全不渲染。控制台无报错。这是**宿主/会话数据侧的问题，不是插件问题**（插件在 view 里根本没拿到快照）。
 
 因此本轮所有结论都来自**纯函数 + 真实代码执行**，没有 DOM 级验收。这一点必须明确，不能把"离线验证通过"说成"功能正常"。
+
+### 12.56 Codex 第三轮：发现一个 P1 致命回归，轨迹页从 0.9.23 起根本渲染不出来（2026-11-18）
+
+#### 一、最严重的问题
+
+```js
+(0, react.useEffect)(() => {
+  if (revealed === null || activeStation === undefined) { selectedIdRef.current = null; return; }
+  ...
+```
+
+`activeStation` 在第 2923 行被使用，而 `const activeStation = ...` 在第 2944 行才声明。**const 有暂时性死区（TDZ）**，于是每次渲染都抛 `ReferenceError`。
+
+Codex 用 React 19.2.8 `renderToString` 实测：空快照、用户快照、步骤快照**全部抛 ReferenceError**；对照 v0.9.22 可正常渲染。
+
+**也就是说：从 0.9.23 到 0.9.25，三个版本轨迹页根本出不来图。**
+
+#### 二、为什么一路绿灯
+
+`test/smoke.test.cjs` 只把**纯函数**抽进 vm 沙箱执行，**从不渲染组件**。组件里的任何运行时错误都测不到。
+
+而真机验证从 0.9.23 起就没跑通过（宿主会话侧故障，全部"重试"）——**两个验证渠道同时失效，缺陷就穿过去了**。
+
+这是我这一整个会话里最严重的一次交付事故：不是"某个边界没覆盖"，是**主功能完全不可用**，而且连着三个版本。
+
+#### 三、修法
+
+改成从列表直接读，绕开 TDZ：
+
+```js
+const selectedStationId = revealed === null ? null
+  : (stations[Math.min(stations.length - 1, Math.max(0, revealed - 1))]?.id ?? null);
+```
+
+#### 四、补上机制，而不是只修这一处
+
+新增守卫 **Z1**：静态扫描 `TraceMapView` 函数体内所有一层 `const`/`let` 声明，检查是否有"被读取时才声明"的情况（剥离字符串字面量与函数参数，排除函数体内的延迟引用如 `seek`）。
+
+变异（恢复 TDZ 写法）→ 红：
+
+```
+Z1 const read before its declaration (TDZ): activeStation used at line 2926, declared at 2948
+```
+
+这条守卫本可以在 0.9.23 就拦住它。
+
+#### 五、其余 4 项
+
+| 项 | 问题 | 修法 |
+|---|---|---|
+| P2 | `blocks: [null]` 在 fold 里抛 TypeError | `Array.isArray` + 逐项判空 |
+| P2 | 畸形记录混在正常窗口里时，告警只在空态显示 | 页头新增 `view.malformed` chip |
+| P2 | 搜索只索引两层子调用 | 改递归（深度上限复用 `SUB_CALL_MAX_DEPTH`） |
+| P3 | `matchPtr` 超出新匹配数时不重置，显示 "2/2" 但跳不动 | 步进前 `Math.min(matchPtr, len-1)` |
+
+三个变异全部变红。
+
+#### 六、三轮总账
+
+| 轮次 | 报出 | 属实 | 修复 |
+|---|---|---|---|
+| 一 | 12 | 12 | 12 |
+| 二 | 8 | 8 | 8 |
+| 三 | 6 | 6 | 6 |
+| 合计 | **26** | **26** | **26** |
+
+#### 七、最该记住的一条
+
+**"测试全绿"和"功能可用"是两件事，中间隔着一层"测试到底执行了什么"。**
+
+我的冒烟测试执行的是纯函数，组件从未被渲染过——所以它绿得再漂亮，也证明不了页面能打开。真机验证本该补上这个缺口，但它恰好坏了，我没有把这个"验证真空"当成阻断项处理，而是继续发版。
+
+**正确做法：主功能的真机验证一旦不可用，就不应该继续发版**；或者至少要有组件级渲染测试（React SSR）兜底。这次补的 Z1 只是静态检查，真正的解法是加一个 `renderToString` 冒烟用例——已记入待办。

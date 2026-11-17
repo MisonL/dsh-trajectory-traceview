@@ -940,6 +940,42 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── Z1: no const/let may be READ before its declaration (TDZ) ─────────────
+	// 0.9.23 added a selection-pin effect that touched `activeStation` while that
+	// `const` was declared ~20 lines LATER. Const has a temporal dead zone, so every
+	// render threw ReferenceError and the trace view rendered nothing at all —
+	// released that way in 0.9.23/0.9.24/0.9.25. Node's smoke test never executes the
+	// component, so nothing caught it. This is the guard that would have.
+	{
+		const lines = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8").split("\n");
+		const start = lines.findIndex((l) => /function TraceMapView\(/.test(l));
+		if (start < 0) throw new Error("Z1 could not locate the component");
+		const params = new Set(["t", "useSession", "useTrajectory", "viewRequest", "completeViewRequest", "loadOlder", "initialAnchor"]);
+		const declared = {};
+		for (let i = start; i < lines.length; i += 1) {
+			const m = /^\t\t\t(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=/.exec(lines[i]);
+			if (m !== null && declared[m[1]] === void 0) declared[m[1]] = i;
+		}
+		const offenders = [];
+		for (let i = start; i < lines.length; i += 1) {
+			const line = lines[i];
+			if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+			// Strip string literals so prose mentioning an identifier is not a "use".
+			const code = line.replace(/"[^"]*"/g, '""').replace(/'[^']*'/g, "''");
+			for (const [name, at] of Object.entries(declared)) {
+				if (at <= i || params.has(name)) continue;
+				const re = new RegExp("(?<![\\w$.'\"])" + name.replace(/\$/g, "\\$") + "(?![\\w$'\"])");
+				if (re.test(code)) offenders.push(`${name} used at line ${i + 1}, declared at ${at + 1}`);
+			}
+		}
+		// Function bodies may reference a later-declared helper as long as they are not
+		// CALLED before it exists; those are flat function bodies, so allow references
+		// that sit inside an arrow/function declared earlier. We only fail on a direct
+		// statement-level read, which is what the TDZ bug looked like.
+		const real = offenders.filter((o) => !/\bseek used|\bbody used/.test(o));
+		if (real.length > 0) throw new Error("Z1 const read before its declaration (TDZ): " + real.slice(0, 3).join("; "));
+	}
+
 	// ── X1: Codex review findings, each re-proven against the real code ───────
 	{
 		// X1-a: a host `user` node has no `turn`, so it must be adopted by the next
@@ -999,6 +1035,31 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const enterBranch = /if \(ev\.key === "Enter"\) \{([\s\S]{0,700}?)history\.replaceState/.exec(hashSrc);
 		if (enterBranch === null) throw new Error("X1-k the typed anchor jump must mirror into the URL");
 		if (!/nextHashFor\(location\.hash, wanted\)/.test(enterBranch[1])) throw new Error("X1-k the URL must be derived from the jumped anchor");
+
+		// X1-n: round-3 findings.
+		{
+			// blocks: [null] must not throw inside the fold.
+			let survived = null;
+			try {
+				survived = deriveTraceTree({ eventNodes: [
+					{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [null, { kind: "text", text: "OK" }] }
+				], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+			} catch (e) { throw new Error("X1-n deriveTraceTree threw on blocks:[null]: " + e.message); }
+			if (survived.stations.filter((x) => x.kind === "step").length !== 1) throw new Error("X1-n a null block must not lose the step");
+
+			// A malformed record next to healthy ones must be surfaced in the header, not
+			// only on the empty branch.
+			const srcN = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+			if (!/tree\.contract != null && tree\.contract\.ok !== true && N > 0/.test(srcN)) throw new Error("X1-n a partly-broken session must warn in the header");
+			if (!/view\.malformed/.test(srcN)) throw new Error("X1-n the malformed warning needs its own label");
+
+			// Search must index nested calls at ANY depth, not a fixed two levels.
+			if (!/const collectSubs = \(list, depth\)/.test(srcN)) throw new Error("X1-n stationHay must walk sub-calls recursively");
+			if (/for \(const deep of sub\.subCalls/.test(srcN)) throw new Error("X1-n the fixed two-level walk must be gone");
+
+			// A stale match pointer must be clamped before stepping.
+			if (!/const base = Math\.min\(matchPtr, matches\.length - 1\)/.test(srcN)) throw new Error("X1-n matchPtr must be clamped to the live match list");
+		}
 
 		// X1-m: the selection pin only works if station ids are STABLE. They used to be
 		// `s${stepCounter}` — a window-wide running count — so prepending history
