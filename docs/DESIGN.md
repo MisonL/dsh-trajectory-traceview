@@ -2896,3 +2896,72 @@ mdBlocks("- Intro\n```js\nconst x=1\n```\n# Heading")
 **外部评审的价值在于它不受我的既有假设约束。** 这 7 项里有 4 项（partial.turn、reasoning、命令状态、轮内 step）都是我反复看过、测过却"看不见"的——因为我的测试和实现共享了同一个错误前提。对抗性评审从契约出发，才照出这些。
 
 我自己在修 #2 时也重演了一次旧毛病：**测试用例没构造出触发条件，就以为修复无效**。变异没变红时，先怀疑用例，再怀疑代码。
+
+### 12.53 Codex 剩余 4 项：全部属实，全部修复（2026-11-17）
+
+承接 §12.52，把 Codex 报的其余 4 项也逐条核实。**4 项全部复现，全部修复。**
+
+#### 1. 【P2】锚点分页在"本轮已到末尾"时提前停止
+
+```js
+const floor = anchorTurnFloor(stations);
+return floor !== null && floor <= parsed.turn;   // 只要见过该轮就判"已覆盖"
+```
+
+窗口里只有 turn 2 的**第 9 步**时，floor 就是 2，于是 `t2s7` 被判定"已覆盖"，翻页停止并回报"未加载"——而 turn 2 的 step 1..8 只差一页。
+
+**旧断言恰恰锁定了这个错误行为**（N1 里 `turn: 9, step: 2` 断言 `true`），所以测试一直是绿的。这类"测试与实现共享同一个错误前提"的情况，是外部评审最大的价值。
+
+新判据（两者其一）：
+- 更早的轮次已加载（翻页不可能再给 turn N 补步骤），**或**
+- 该轮的第 1 步已在窗口里
+
+另加一道前置：目标轮次必须**确实在窗口内**，否则未来的轮次会被误判为已覆盖（我第一版漏了这条，被自己的用例抓出来：窗口只有 t2、求 t3s1 返回了 true）。
+
+#### 2. 【P2】加载更早历史改变了正在查看的记录
+
+`revealed` 是**位置索引**，`activeIdx = R - 1`。向前插入更早的记录后，同一索引指向了另一条记录——用户正看着的 `e30` 会跳到 `e20`。
+
+修法：站点有稳定 `id`（`s1`/`u5`），记住选中站点的 id，在站点列表变化后用 `findIndex` 重新定位。新增 `selectedIdRef` + 以 `stationsSignature` 为依赖的修复 effect。
+
+#### 3. 【P2】回车定位的新锚点不更新 URL
+
+URL 同步只写在**从 URL 出发**的那条路径上（`anchorToApply` 分支）。用户在输入框按回车走的是另一条路，于是 hash 仍是旧值；下一个站点到达时旧 hash 被重新应用，**把选择抢回去**。
+
+修法：Enter 分支成功落地后同样 `nextHashFor` + `history.replaceState`。
+
+#### 4. 【P3】递归 PTC 子调用链被截断
+
+`subDetailOf` 不递归 `sub.subCalls`，所以只保留第一层。真实契约允许 root→child→leaf。
+
+修法：
+- 数据层：`subDetailOf(sub, depth)` 递归，`SUB_CALL_MAX_DEPTH = 8` 防环
+- 导出的 `buildStepMarkdown` 原本也只打一层，新增 `pushSubLines(L, sub, level)` 递归输出，带缩进、错误名、结果首行
+
+实测三层链（root→CHILD→LEAF，LEAF 带 `E_LEAF`）导出为：
+
+```
+  - ↳ **CHILD** (10 ms)
+    - ↳ **LEAF** (9 ms) ✗
+      - ✗ E_LEAF
+```
+
+#### 变异验证（全部变红）
+
+| 变异 | 结果 |
+|---|---|
+| 覆盖判断退回 `floor <= turn` | `N1 a turn present without its start must keep paging` |
+| 选区不再按 id 重定位 | `X1-i the pin must re-select the found station` |
+| 修复被常量守卫短路 | `X1-i the repair pass must not be neutered` |
+| 子调用不递归 | `X1-j grandchild sub-call was dropped from the data` |
+| 导出只打一层 | `X1-j export lost the grandchild call` |
+| 回车不同步 URL | `X1-k the typed anchor jump must mirror into the URL` |
+
+#### 本轮总结：Codex 12 项，11 项修复
+
+| 状态 | 项 |
+|---|---|
+| 已修复 | partial 归轮、流式 reasoning、命令/孤立工具状态、失败命令计数、轮内 step 锚点、围栏被列表吞、c 别名、partial.timing、锚点分页早停、选区被历史打乱、URL 不同步、有序列表起始号、递归子调用 |
+| 未处理 | 无 |
+
+**12 项全部核实为真、全部修复。** 没有一项是误报。这个命中率说明：让一个不共享我假设的评审者读代码，比我自己再读十遍有效。

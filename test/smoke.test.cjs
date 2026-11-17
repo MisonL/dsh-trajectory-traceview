@@ -916,9 +916,15 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 3, step: 1 }, win) !== false) throw new Error("N1 an older turn must not be considered covered");
 		// Anchor inside the window -> stop paging.
 		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 10, step: 1 }, win) !== true) throw new Error("N1 a covered turn must stop paging");
-		if (anchorCoveredByWindow({ ok: true, form: "t", turn: 9, step: 2 }, win) !== true) throw new Error("N1 t-anchors must behave like p-anchors");
-		// Exactly at the floor: covered (the turn is loaded).
-		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 9, step: 1 }, win) !== true) throw new Error("N1 the floor turn itself is loaded");
+		// A turn being PRESENT is not the same as the requested step being loaded: the
+		// window here holds turn 9's last step only, so step 2 may still be one page back.
+		// The old assertion demanded `true` here and that is exactly the bug Codex found
+		// (the anchor gave up and reported "not loaded" while the page was available).
+		if (anchorCoveredByWindow({ ok: true, form: "t", turn: 9, step: 2 }, win) !== false) throw new Error("N1 a turn present without its start must keep paging");
+		// Once the turn's first step is loaded, the turn is genuinely covered.
+		const winHeaded = win.concat([{ kind: "step", turn: 9, stepNo: 1, turnStep: 1, anchorSeq: 880 }]);
+		if (anchorCoveredByWindow({ ok: true, form: "p", turn: 9, step: 2 }, winHeaded) !== true) throw new Error("N1 a turn whose start is loaded is covered");
+		if (anchorCoveredByWindow({ ok: true, form: "t", turn: 9, step: 2 }, winHeaded) !== true) throw new Error("N1 t-anchors must behave like p-anchors");
 		// Seq anchors keep their existing behaviour.
 		if (anchorCoveredByWindow({ ok: true, form: "e", seq: 700 }, win) !== false) throw new Error("N1 an older seq must not be covered");
 		if (anchorCoveredByWindow({ ok: true, form: "e", seq: 950 }, win) !== true) throw new Error("N1 a covered seq must stop paging");
@@ -971,6 +977,52 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 		if (st7[2].turnStep !== 1) throw new Error("X1-d turnStep must be per-turn, got " + st7[2].turnStep);
 		if (resolveAnchorInStations(parseAnchor("tvp1:t2s1"), st7).ok !== true) throw new Error("X1-d tvp1:t2s1 must resolve");
 		if (resolveAnchorInStations(parseAnchor("tvp1:t2s2"), st7).ok !== false) throw new Error("X1-d tvp1:t2s2 must not resolve");
+
+		// X1-j: nested programmatic tool calls must survive into data AND export.
+		const treePtc = deriveTraceTree({ eventNodes: [
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "root", name: "ptc", argsRaw: "{}" }] },
+			{ kind: "tool-result", seq: 5, time: 50, turn: 1, step: 1, callId: "root", callTime: 10, content: [{ type: "text", text: "ROOT_OK" }], isError: false,
+				subCalls: [{ kind: "tool-result", callId: "child", callTime: 20, time: 30, name: "CHILD", content: [{ type: "text", text: "CHILD" }], isError: false,
+					subCalls: [{ kind: "tool-result", callId: "leaf", callTime: 31, time: 40, name: "LEAF", content: [{ type: "text", text: "MISSING_GRANDCHILD" }], isError: true, error: { name: "E_LEAF" } }] }] }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+		const cellPtc = treePtc.stations.find((x) => x.kind === "step").cells.find((c) => c.kind === "tool");
+		if (cellPtc.subCalls[0].subCalls.length !== 1) throw new Error("X1-j grandchild sub-call was dropped from the data");
+		if (cellPtc.subCalls[0].subCalls[0].isError !== true) throw new Error("X1-j nested error flag lost");
+		const mdPtc = buildStepMarkdown(treePtc.stations.find((x) => x.kind === "step"), [], false, t);
+		if (!mdPtc.includes("CHILD")) throw new Error("X1-j export lost the child call");
+		if (!mdPtc.includes("LEAF")) throw new Error("X1-j export lost the grandchild call");
+		if (!mdPtc.includes("E_LEAF")) throw new Error("X1-j export lost the nested error name");
+
+		// X1-k: a typed jump must update the URL, or the old hash re-applies on the next
+		// arriving station and steals the selection back.
+		const hashSrc = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		const enterBranch = /if \(ev\.key === "Enter"\) \{([\s\S]{0,700}?)history\.replaceState/.exec(hashSrc);
+		if (enterBranch === null) throw new Error("X1-k the typed anchor jump must mirror into the URL");
+		if (!/nextHashFor\(location\.hash, wanted\)/.test(enterBranch[1])) throw new Error("X1-k the URL must be derived from the jumped anchor");
+
+		// X1-h: a turn merely being present is not coverage. A window holding only
+		// turn 2's step 9 must keep paging for `t2s7`; the old floor test stopped early.
+		const winPartial = [{ kind: "step", turn: 2, turnStep: 9, stepNo: 9, anchorSeq: 90 }];
+		if (anchorCoveredByWindow(parseAnchor("tvp1:t2s7"), winPartial) !== false) throw new Error("X1-h a partial turn must keep paging");
+		// A FUTURE turn must not look covered just because no step matches yet.
+		if (anchorCoveredByWindow(parseAnchor("tvp1:t3s1"), winPartial) !== false) throw new Error("X1-h a future turn is not covered");
+		// Loading that turn's start, or any earlier turn, does settle it.
+		const winHeaded2 = winPartial.concat([{ kind: "step", turn: 2, turnStep: 1, stepNo: 1, anchorSeq: 70 }]);
+		if (anchorCoveredByWindow(parseAnchor("tvp1:t2s7"), winHeaded2) !== true) throw new Error("X1-h a headed turn is covered");
+		const winOlder = winPartial.concat([{ kind: "step", turn: 1, turnStep: 1, stepNo: 1, anchorSeq: 10 }]);
+		if (anchorCoveredByWindow(parseAnchor("tvp1:t2s7"), winOlder) !== true) throw new Error("X1-h an earlier turn settles coverage");
+
+		// X1-i: the selection must survive prepended history. `revealed` is a position,
+		// so paging in older records used to move the reader to a different station.
+		const selSrc = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/selectedIdRef/.test(selSrc)) throw new Error("X1-i the selection must be pinned by station id");
+		if (!/stations\.findIndex\(\(st\) => st\.id === id\)/.test(selSrc)) throw new Error("X1-i the pin must re-derive the position from the id");
+		if (!/\}, \[stationsSignature\]\)/.test(selSrc)) throw new Error("X1-i the repair pass must run when the station list changes");
+		// The repair must actually MOVE the selection, not just exist. Extract the effect
+		// body between the pin's identity lookup and its setRevealed call.
+		const eff = /const at = stations\.findIndex\(\(st\) => st\.id === id\);([\s\S]{0,240}?)setRevealed\(at \+ 1\)/.exec(selSrc);
+		if (eff === null) throw new Error("X1-i the pin must re-select the found station");
+		if (/if \(true\) return|if \(false\) return/.test(eff[1])) throw new Error("X1-i the repair pass must not be neutered by a constant guard");
 
 		// X1-f: streaming reasoning must survive a tool cell already in the step. Tool
 		// cells carry no `thinking`, and `undefined !== ""` made the old guard treat the

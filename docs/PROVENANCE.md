@@ -31,9 +31,9 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**15 个原样保留、9 个被修改、0 个被删除**；本仓**新增 29 个**。
+上游 24 个函数：**14 个原样保留、10 个被修改、0 个被删除**；本仓**新增 30 个**。
 
-### 原样保留（15）
+### 原样保留（14）
 
 未做任何改动，可与上游逐字对照：
 
@@ -48,12 +48,11 @@
 - `prettyArgs`
 - `prettyJson`
 - `reconstructMessages`
-- `subDetailOf`
 - `subName`
 - `textOfContent`
 - `toolGlyph`
 
-### 已修改（9）
+### 已修改（10）
 
 **这些是二开最容易与前人意图冲突的地方**——功能骨架来自上游，但行为已被改变。每处都应在 `docs/DESIGN.md` 里找得到"为什么改"的记录：
 
@@ -66,8 +65,9 @@
 - `matchStations`
 - `newStepState`
 - `promptDiffOf`
+- `subDetailOf`
 
-### 本仓新增（29）
+### 本仓新增（30）
 
 上游完全没有：
 
@@ -90,6 +90,7 @@
 - `nextHashFor`
 - `parseAnchor`
 - `promptTextDiff`
+- `pushSubLines`
 - `renderMdInline`
 - `resolveAnchorInStations`
 - `safeJsonPreview`
