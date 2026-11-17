@@ -2965,3 +2965,90 @@ URL 同步只写在**从 URL 出发**的那条路径上（`anchorToApply` 分支
 | 未处理 | 无 |
 
 **12 项全部核实为真、全部修复。** 没有一项是误报。这个命中率说明：让一个不共享我假设的评审者读代码，比我自己再读十遍有效。
+
+### 12.54 Codex 第二轮：审我的修复，抓出 5 处回归 + 3 处新缺陷（2026-11-17）
+
+第一轮它 12 项全中。第二轮我换了个任务：**审我自己刚写的修复**，外加上一轮没碰过的区域。
+
+结果：**我引入的回归 5 处，新缺陷 3 处，全部属实。** 这比第一轮更值得记——因为问题是我自己造的。
+
+#### 回归（我造成的）
+
+**R3：`array.map(subDetailOf)` 把索引当成 depth**
+
+```js
+subCalls: res.subCalls.map(subDetailOf)   // 第二参数是 index!
+```
+
+我给 `subDetailOf` 加了 `depth` 参数，而 `map` 的第二个实参正好是**索引**。于是第 9 个兄弟调用拿到 `depth=8`，撞上 `SUB_CALL_MAX_DEPTH`，它自己的子调用被丢弃。
+
+修法：`.map((sub) => subDetailOf(sub, 0))`，4 处全改。测试：9 个兄弟各带 1 个子调用，任何一个丢失即失败。
+
+**R4：`~~~` 围栏不识别**
+
+我在列表终止规则里加了 `~~~`，却忘了开标记正则只认反引号——整段 `~~~js` 内容被当成段落。修法：开标记同时认 `` ` `` 和 `~`，闭合必须**同字符且不短于开启**。
+
+**R6：有序列表吞并 `-` 项，且渲染层不传 `start`**
+
+`7. ordered\n- bullet` 被解析成一个 `start=7` 的两项 ol，bullet 变成编号项；即便解析对了，渲染层也没把 `start` 传给元素，`<ol>` 仍从 1 编号。两处都修：解析遇不同标记即开新列表；`listProps.start = b.start`。
+
+**R5：子调用结果重复输出**
+
+`pushSubLines` 已经打印了 `resultText`，外层循环又打了一遍。导出里每条子调用结果出现两次。
+
+**R1a：尾部用户消息被归错轮**
+
+上一轮我删掉了 `partial.turn` 回退，却没处理"会话以用户消息结尾"这种情况：尾部 flush 用 `lastTurnNo + 1`，而当前输入实际属于**正在生成的轮次**。
+
+修法：尾部 flush 时若存在 `partial.turn`，就采用它（这恰恰是 `partial.turn` 的正确用途——描述当前输入，而不是历史）。实测有历史时顺序为 `user, step/t1, user, step/t5`。
+
+#### 新缺陷（上一轮没覆盖的）
+
+**N1【P1】：畸形 `content` 能击穿快照降级并让视图崩溃**
+
+```js
+for (const b of content ?? [])   // content 是对象时抛 TypeError
+```
+
+而 `snapshotContract` 只校验 `kind`/`seq`，判定 `ok:true`，于是视图走正常分支然后崩掉。
+
+两处都修：`textOfContent` 加 `Array.isArray` 守卫（`blocksText` 早就这么做了，两个同类函数契约不一致）；`snapshotContract` 把"`content` 存在但非数组"计入 `bad-node-shape`，让视图走它自己的不兼容提示。
+
+**N3：搜索不索引递归子调用**
+
+`stationHay` 只收集顶层 call 的字段，搜子调用名搜不到。补上（含孙级）。
+
+**R2：选区钉住的顺序问题**（Codex 报，我复核后确认属于真实风险）
+
+身份记录 effect 先跑、修复 effect 后跑，前插历史时 `selectedIdRef` 可能先被覆盖成索引位置上的旧身份。这个我改成了"只在 `revealed` 变化时记录身份"，避免在列表变化时覆盖。
+
+#### 变异验证（8 个全部变红）
+
+| 变异 | 结果 |
+|---|---|
+| `map` 索引漏进 depth | `sibling #8 lost its children` |
+| `~~~` 不作开标记 | `tilde fence must parse as code` |
+| 混排列表吞并 | `mixed markers must split lists, got ol` |
+| `textOfContent` 不设防 | `threw on a non-array` |
+| contract 放过畸形 | `a malformed content must fail the contract` |
+| hay 不含子调用 | `stationHay must index nested sub-call names` |
+| 子调用结果重复 | `printed 2 times, expected once` |
+| 渲染层不传 start | `the ordered list must pass its start` |
+
+#### 两次评审的总账
+
+| 轮次 | 报出 | 属实 | 修复 |
+|---|---|---|---|
+| 第一轮 | 12 | 12 | 12 |
+| 第二轮 | 8 | 8 | 8 |
+| 合计 | **20** | **20** | **20** |
+
+**零误报，两次。**
+
+#### 教训（比技术细节更重要）
+
+**我自己写的修复，我自己看不见它的回归。** 第一轮我能修好 12 项，是因为那是我在读别人的代码；第二轮这 5 处回归全是我在"修复"时亲手引入的，而我当时的断言只验证了"新行为对不对"，没验证"旧行为还对不对"。
+
+这也解释了为什么 `textOfContent` 那条变异第一次没变红：我断言返回值 `=== ""`，但旧代码是**抛异常**，异常被测试框架当成"用例失败"以外的东西——只比较返回值根本区分不了"返回空"和"崩了"。加 `try/catch` 后才真正锁住。
+
+**结论：修复必须同时断言"新行为生效"和"旧行为未被破坏"，否则修复本身就是新的缺陷来源。**

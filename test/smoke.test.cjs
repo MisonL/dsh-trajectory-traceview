@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -999,6 +999,64 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const enterBranch = /if \(ev\.key === "Enter"\) \{([\s\S]{0,700}?)history\.replaceState/.exec(hashSrc);
 		if (enterBranch === null) throw new Error("X1-k the typed anchor jump must mirror into the URL");
 		if (!/nextHashFor\(location\.hash, wanted\)/.test(enterBranch[1])) throw new Error("X1-k the URL must be derived from the jumped anchor");
+
+		// X1-l: regressions from round 2 of the Codex audit.
+		{
+			// R3: `array.map(subDetailOf)` passes the INDEX as the second argument, which
+			// landed in the new `depth` slot — the 9th sibling started at depth 8 and lost
+			// its own children.
+			const many = [];
+			for (let i = 0; i < 9; i += 1) many.push({ kind: "tool-result", callId: "c" + i, callTime: 1, time: 2, name: "S" + i, content: [], isError: false, subCalls: [{ kind: "tool-result", callId: "gc" + i, callTime: 1, time: 2, name: "GC" + i, content: [], isError: false }] });
+			const treeMany = deriveTraceTree({ eventNodes: [
+				{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "root", name: "ptc", argsRaw: "{}" }] },
+				{ kind: "tool-result", seq: 5, time: 50, turn: 1, step: 1, callId: "root", callTime: 10, content: [], isError: false, subCalls: many }
+			], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+			const cellMany = treeMany.stations.find((x) => x.kind === "step").cells.find((c) => c.kind === "tool");
+			const lostAt = cellMany.subCalls.findIndex((x) => (x.subCalls ?? []).length !== 1);
+			if (lostAt >= 0) throw new Error("X1-l sibling #" + lostAt + " lost its children (map index leaked into depth)");
+
+			// R4: `~~~` is a valid fence opener and must produce a code block.
+			const tilde = mdBlocks("~~~js\nconst x=1\n~~~");
+			if (tilde.length !== 1 || tilde[0].type !== "code" || tilde[0].lang !== "js") throw new Error("X1-l tilde fence must parse as code, got " + JSON.stringify(tilde));
+
+			// R6: a different marker starts a NEW list; it must not be swallowed.
+			const mixed = mdBlocks("7. ordered\n- bullet");
+			if (mixed.map((x) => x.type).join(",") !== "ol,ul") throw new Error("X1-l mixed markers must split lists, got " + mixed.map((x) => x.type).join(","));
+
+			// N1: a wrong-shaped `content` must not crash the fold nor pass validation.
+			// Must not THROW: the old `for…of content` raised TypeError and took the whole
+			// view down. Comparing the return value alone cannot tell "" from a crash.
+			let tolerated = null;
+			try { tolerated = textOfContent({ text: "x" }); } catch (e) { throw new Error("X1-l textOfContent threw on a non-array: " + e.message); }
+			if (tolerated !== "") throw new Error("X1-l textOfContent must return empty for a non-array");
+			const badContract = snapshotContract({ eventNodes: [{ kind: "user", seq: 1, content: { text: "x" } }] });
+			if (badContract.ok !== false) throw new Error("X1-l a malformed content must fail the contract, not crash the view");
+
+			// R5: a sub-call result must appear exactly once in the export.
+			const treeDup = deriveTraceTree({ eventNodes: [
+				{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "r", name: "ptc", argsRaw: "{}" }] },
+				{ kind: "tool-result", seq: 5, time: 50, turn: 1, step: 1, callId: "r", callTime: 10, content: [], isError: false,
+					subCalls: [{ kind: "tool-result", callId: "kid", callTime: 20, time: 30, name: "CHILD_CALL", content: [{ type: "text", text: "CHILD_RESULT_UNIQUE" }], isError: false }] }
+			], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+			const mdDup = buildStepMarkdown(treeDup.stations.find((x) => x.kind === "step"), [], false, t);
+			const occurrences = (mdDup.match(/CHILD_RESULT_UNIQUE/g) || []).length;
+			if (occurrences !== 1) throw new Error("X1-l sub-call result printed " + occurrences + " times, expected once");
+
+			// R6b: the renderer must pass `start` through, or <ol> renumbers from 1.
+			const renderSrc = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+			if (!/listProps\.start = b\.start/.test(renderSrc)) throw new Error("X1-l the ordered list must pass its start to the element");
+
+			// N3: a search for a nested child name must find the step.
+			const hay = (function () {
+				const st = deriveTraceTree({ eventNodes: [
+					{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "r", name: "ptc", argsRaw: "{}" }] },
+					{ kind: "tool-result", seq: 5, time: 50, turn: 1, step: 1, callId: "r", callTime: 10, content: [], isError: false,
+						subCalls: [{ kind: "tool-result", callId: "kid", callTime: 20, time: 30, name: "NESTED_NAME_XYZ", content: [], isError: false }] }
+				], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t).stations.find((x) => x.kind === "step");
+				return stationHay(st);
+			})();
+			if (!hay.includes("nested_name_xyz")) throw new Error("X1-l stationHay must index nested sub-call names");
+		}
 
 		// X1-h: a turn merely being present is not coverage. A window holding only
 		// turn 2's step 9 must keep paging for `t2s7`; the old floor test stopped early.
