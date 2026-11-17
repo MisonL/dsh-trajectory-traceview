@@ -3190,3 +3190,43 @@ Z1 const read before its declaration (TDZ): activeStation used at line 2926, dec
 我的冒烟测试执行的是纯函数，组件从未被渲染过——所以它绿得再漂亮，也证明不了页面能打开。真机验证本该补上这个缺口，但它恰好坏了，我没有把这个"验证真空"当成阻断项处理，而是继续发版。
 
 **正确做法：主功能的真机验证一旦不可用，就不应该继续发版**；或者至少要有组件级渲染测试（React SSR）兜底。这次补的 Z1 只是静态检查，真正的解法是加一个 `renderToString` 冒烟用例——已记入待办。
+
+### 12.57 补上真正能拦住 P1 的测试：组件级 SSR 渲染（2026-11-18）
+
+§12.56 记录了一个事故：轨迹页从 0.9.23 到 0.9.25 无法渲染，而测试全绿、真机又恰好坏了。当时我说"真正的解法是加 `renderToString` 冒烟用例，已记入待办"。这轮把它做掉。
+
+#### 一、做法
+
+冒烟套件新增 **Z2**：
+
+- 用 `react` + `react-dom/server` 真实渲染 `TraceMapView`
+- 只抽取 `pure helpers` 与 `component` 两个 region 进 vm（整包会调 `window.__ModuleLoader__.load`）
+- 补齐模块作用域里的两个外部绑定：`react`、`fragment`（`react.Fragment`，组件在用）
+- 渲染四种快照：空、只有用户消息、单步、流式（`partial` 存在）
+
+依赖是 **devDependencies**（`react`/`react-dom`）。没装时 Z2 会打印 `Z2 SKIPPED` 而不是假装通过——**跳过必须可见，不能静默变绿**。
+
+#### 二、证明它真的能抓住那个缺陷
+
+把 `lib/client.js` 换回 **v0.9.25**（含 TDZ 缺陷），跑同一套测试：
+
+```
+Error: Z2 rendering the empty snapshot threw:
+  ReferenceError: Cannot access 'activeStation' before initialization
+```
+
+换回 0.9.26：全绿。**
+
+这是本次会话里第一条**被验证过能复现真实线上事故**的测试。之前所有断言都是"我相信它能抓住"，这一条是"我证明它能抓住"。
+
+#### 三、顺带发现
+
+写 Z2 时立刻撞到一个此前没人能看见的问题：`live` 快照渲染抛 `fragment is not defined`——因为 `const fragment = react.Fragment` 在 region 之外。这不是产品缺陷（真实 bundle 作用域里有它），但说明**测试切片必须补齐模块级绑定**，否则测的是残缺环境。
+
+#### 四、教训
+
+**测试的价值不在于"跑过了"，而在于"它能失败"。**
+
+一条从没红过的测试，和没有测试的区别只是心理安慰。Z2 上线前我做的第一件事是拿真实缺陷版本去喂它——它红了，我才认为它有价值。
+
+这个检查应该对每一条新断言都做。这一整个会话里，我有过多次"断言写太弱、变异没变红"的经历（`anchorLoadTarget`、死代码守卫、`textOfContent` 返回值比较），Z2 是第一个**主动拿历史缺陷验证**的例子。

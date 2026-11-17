@@ -940,6 +940,77 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── Z2: the component must actually RENDER ────────────────────────────────
+	// The smoke suite only ever executed pure helpers inside a vm, so a render-time
+	// crash (0.9.23–0.9.25: `ReferenceError: Cannot access 'activeStation' before
+	// initialization`) shipped for three versions with every test green. This block
+	// renders the REAL component through react-dom/server.
+	{
+		let React = null;
+		let renderToString = null;
+		try {
+			React = require("react");
+			renderToString = require("react-dom/server").renderToString;
+		} catch {
+			React = null;
+		}
+		if (React === null || typeof renderToString !== "function") {
+			// Dependencies are dev-only; skip loudly instead of pretending to verify.
+			console.log("Z2 SKIPPED: react / react-dom/server not installed (run `npm i --no-save react react-dom`)");
+		} else {
+			const fsZ = require("node:fs");
+			const pathZ = require("node:path");
+			const vmZ = require("node:vm");
+			const srcZ = fsZ.readFileSync(pathZ.join(__dirname, "..", "lib", "client.js"), "utf8");
+			const jsx = (type, props, key) => {
+				const p = props === null || props === void 0 ? {} : Object.assign({}, props);
+				if (key !== void 0 && key !== null) p.key = key;
+				return React.createElement(type, p);
+			};
+			const boxZ = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
+				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
+				react: React, jsx, jsxs: jsx, react_jsx_runtime: { jsx, jsxs: jsx },
+				document: void 0, window: void 0, location: void 0 };
+			boxZ.globalThis = boxZ;
+			vmZ.createContext(boxZ);
+			// Evaluate only the helper + component regions: the outer bundle calls
+			// window.__ModuleLoader__.load(...), which a bare vm context does not provide.
+			const h0 = srcZ.indexOf("//#region pure helpers: snapshot -> timeline tree");
+			const h1 = srcZ.indexOf("//#endregion", h0);
+			const c0 = srcZ.indexOf("//#region horizontal timeline + replay component");
+			const c1 = srcZ.indexOf("//#endregion", c0);
+			if (h0 < 0 || c0 < 0) throw new Error("Z2 could not locate the helper/component regions");
+			// The module scope defines `fragment` (react.Fragment) outside both regions; the
+			// component uses it, so the slice needs that one binding too.
+			vmZ.runInContext("const fragment = react.Fragment;\n" + srcZ.slice(h0, h1) + "\n" + srcZ.slice(c0, c1) + ";globalThis.__testComponent = { TraceMapView };", boxZ, { timeout: 60000 });
+			const Comp = boxZ.__testComponent && boxZ.__testComponent.TraceMapView;
+			if (typeof Comp !== "function") throw new Error("Z2 the component test hook never fired");
+			const SNAPS = {
+				empty: { eventNodes: [], requests: [], callSchemas: {}, runningCalls: {}, partial: null },
+				user: { eventNodes: [{ kind: "user", seq: 1, time: 1, blocks: [{ kind: "text", text: "hi" }] }], requests: [], callSchemas: {}, runningCalls: {}, partial: null },
+				step: { eventNodes: [{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "hello" }] }], requests: [], callSchemas: {}, runningCalls: {}, partial: null },
+				live: { eventNodes: [{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "hello" }] }], requests: [], callSchemas: {}, runningCalls: {}, partial: { turn: 2, step: 1, blocks: [{ kind: "text", text: "streaming" }], timing: { stepStartTime: 1, firstTokenTime: 2 } } },
+			};
+			for (const name of Object.keys(SNAPS)) {
+				const snap = SNAPS[name];
+				let html = null;
+				try {
+					html = renderToString(React.createElement(Comp, {
+						useSession: (sel) => { try { return sel({ openState: "open", snapshot: snap }); } catch { return void 0; } },
+						useTrajectory: () => snap,
+						t: (k) => k,
+						viewRequest: null,
+						completeViewRequest: () => {},
+						loadOlder: async () => false,
+					}));
+				} catch (e) {
+					throw new Error("Z2 rendering the " + name + " snapshot threw: " + e.constructor.name + ": " + e.message.slice(0, 140));
+				}
+				if (typeof html !== "string" || !html.includes("dstv_root")) throw new Error("Z2 the " + name + " snapshot rendered no view root");
+			}
+		}
+	}
+
 	// ── Z1: no const/let may be READ before its declaration (TDZ) ─────────────
 	// 0.9.23 added a selection-pin effect that touched `activeStation` while that
 	// `const` was declared ~20 lines LATER. Const has a temporal dead zone, so every
