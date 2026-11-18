@@ -1075,6 +1075,12 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!users.some((u) => String(u.text).includes("block.image"))) throw new Error("CONTRACT1 an image-only user message rendered empty");
 		const mixed = users.find((u) => String(u.text).startsWith("hi"));
 		if (mixed === void 0 || !String(mixed.text).includes("b.txt")) throw new Error("CONTRACT1 a mixed user message dropped its file part");
+		// The STREAMING (partial) loop is a second implementation of the same fold and
+		// was missed when the durable one was fixed: a live image reply showed an empty
+		// step until the turn finalized. Assert BOTH paths.
+		const partialTree = deriveTraceTree({ eventNodes: [], requests: [], callSchemas: {}, runningCalls: {}, partial: { turn: 1, step: 1, blocks: [{ kind: "image" }, { kind: "other", block: { type: "video" } }] } }, t);
+		const pCells = partialTree.stations.filter((x) => x.kind === "step")[0].cells;
+		if (pCells.length !== 2) throw new Error("CONTRACT1 the streaming path dropped image/other blocks: " + pCells.length + " cells");
 	}
 
 	// ── SEC1: model-supplied links must not reach the DOM with an active scheme ──

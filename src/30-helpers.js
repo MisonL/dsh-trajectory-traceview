@@ -957,6 +957,13 @@ const usedStationIds = new Set();
 						// and it was dropped. Only cells that actually hold prose count.
 						&& !st.cells.some((c) => typeof c.thinking === "string" && c.thinking !== "")) {
 						st.cells.push({ id: `pr${b.text.length}`, kind: "assistant", text: "", thinking: b.text });
+					} else if (b.kind === "image" || b.kind === "other") {
+						// The durable loop got this placeholder in the same change; the STREAMING
+						// branch was missed, so a live image reply showed an empty step until the
+						// turn finalized. Both loops must agree.
+						const plabel = b.kind === "image" ? t("block.image")
+							: `${t("block.other")}${typeof b.block === "object" && b.block !== null && typeof b.block.type === "string" ? ` · ${b.block.type}` : ""}`;
+						st.cells.push({ id: `po${st.cells.length}`, kind: "assistant", text: plabel, thinking: "" });
 					} else if (b.kind === "tool-call") {
 						if (attachedCallIds.has(b.callId)) continue;
 						attachedCallIds.add(b.callId);
