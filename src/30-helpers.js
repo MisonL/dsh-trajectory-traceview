@@ -553,6 +553,12 @@
 				// prove anything; otherwise a future turn would look "covered".
 				if (!hasTargetTurn) return false;
 				if (floor !== null && floor < parsed.turn) return true;
+				// Nothing here: "the target turn is the oldest turn loaded" is NOT proof
+				// that no earlier page holds more of it (N1 covers exactly that: turn 9's
+				// earlier steps can still be one page back). Paging stops on `hasMore`
+				// instead — see the caller, which already refuses to page past history.
+				// The 101 s / 3,360-station deep link was the CALLER searching all history
+				// for a step that never existed, which shows up as an honest "not loaded".
 				return stations.some((st) => st.kind === "step"
 					&& Number.isFinite(st.turn) && st.turn === parsed.turn
 					&& (st.turnStep ?? st.stepNo) === 1);

@@ -450,9 +450,20 @@
 						let moved = false;
 						try { moved = await loadOlder(); } catch { moved = false; }
 						pages += 1;
+						// A deep link can legitimately page 40 times (measured 101 s on a
+						// long session). A static "loading…" gave no sign of progress, so
+						// the user could not tell a slow search from a hung one.
+						setAnchorNote(t("anchor.searchingPages")
+							.replace("{n}", String(pages))
+							.replace("{max}", String(ANCHOR_MAX_PAGES))
+							.replace("{stations}", String(stationsRef.current.length)));
 						// Wait for the derived tree to catch up, then re-resolve.
+						// Back off instead of always paying a full 250 ms: React normally
+						// re-derives within a frame, so the first check is cheap and later
+						// ones stretch out. Deep links page up to 40 times, and the fixed
+						// delay alone added ~10 s to that path.
 						for (let i = 0; i < ANCHOR_REVEAL_TRIES; i += 1) {
-							await new Promise((r) => setTimeout(r, ANCHOR_REVEAL_MS));
+							await new Promise((r) => setTimeout(r, Math.min(ANCHOR_REVEAL_MS, 20 * 2 ** i)));
 							resolved = resolveAnchorInStations(parsed, stationsRef.current);
 							if (resolved.ok === true) break;
 							if (stationsRef.current.length !== before) break;
