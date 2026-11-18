@@ -239,7 +239,13 @@
 			const [streamTick, setStreamTick] = (0, react.useState)(0);
 			(0, react.useEffect)(() => {
 				if (!streaming) return void 0;
-				const id = setInterval(() => setStreamTick((v) => v + 1), STREAM_REBUILD_MS);
+				// Rebuilding the whole tree while the tab is hidden burns CPU for a
+				// document nobody is looking at. The next tick after returning refreshes
+				// it anyway, so skipping hidden ticks loses nothing visible.
+				const id = setInterval(() => {
+					if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+					setStreamTick((v) => v + 1);
+				}, STREAM_REBUILD_MS);
 				return () => clearInterval(id);
 			}, [streaming, partialSig]);
 			const tree = (0, react.useMemo)(
@@ -267,7 +273,13 @@
 			// Replay engine: advance the playhead while playing.
 			(0, react.useEffect)(() => {
 				if (!playing) return undefined;
-				const id = setInterval(() => setRevealed((r) => (r === null ? N : Math.min(r, N) + 1)), speedMs);
+				// Same reasoning as the streaming tick: replay is a visual animation, so
+				// advancing it in a hidden tab only spends CPU. Playback resumes from the
+				// same position when the tab becomes visible again.
+				const id = setInterval(() => {
+					if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+					setRevealed((r) => (r === null ? N : Math.min(r, N) + 1));
+				}, speedMs);
 				return () => clearInterval(id);
 			}, [playing, speedMs, N]);
 

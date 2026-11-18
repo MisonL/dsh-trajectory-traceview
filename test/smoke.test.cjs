@@ -982,6 +982,23 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── PERF5: timers that drive redraws must idle while the tab is hidden ────
+	// Both the streaming rebuild (120 ms) and the replay tick rebuilt/animated the tree
+	// for a document nobody could see. A source check is enough here: the behaviour is
+	// a guard clause inside the interval callback, which the DOM cannot exercise from a
+	// Node test without faking visibility for every render.
+	{
+		const srcP = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "40-view.js"), "utf8");
+		const visit = /document\.visibilityState === "hidden"/g;
+		const count = (srcP.match(visit) || []).length;
+		if (count < 2) throw new Error("PERF5 expected both the streaming and replay ticks to skip hidden tabs, found " + count);
+		// Each guard must sit inside an interval callback, not in a one-off effect.
+		const streamBlock = srcP.slice(srcP.indexOf("setStreamTick((v) => v + 1)") - 400, srcP.indexOf("setStreamTick((v) => v + 1)"));
+		if (!/visibilityState/.test(streamBlock)) throw new Error("PERF5 the streaming tick does not check visibility");
+		const replayBlock = srcP.slice(srcP.indexOf("setRevealed((r) => (r === null ? N") - 400, srcP.indexOf("setRevealed((r) => (r === null ? N"));
+		if (!/visibilityState/.test(replayBlock)) throw new Error("PERF5 the replay tick does not check visibility");
+	}
+
 	// ── I18N3: no CJK literal may survive outside the locale tables ──────────
 	// `m.role === "note" ? "压缩" : m.role` painted a Chinese role name in the English
 	// Raw-request panel. Scanning the sources is the only way to catch a one-off literal
