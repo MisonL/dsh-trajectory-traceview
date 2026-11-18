@@ -961,6 +961,21 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (ms > 3000) throw new Error("PERF3 sub-call materialisation too slow: " + ms + "ms");
 	}
 
+	// ── ID1: station ids must be unique (React keys + selection pin identity) ──
+	{
+		const dup = deriveTraceTree({ eventNodes: [
+			{ kind: "user", seq: 7, time: 1, blocks: [] },
+			{ kind: "user", seq: 7, time: 2, blocks: [] }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t).stations.map((x) => x.id);
+		if (new Set(dup).size !== dup.length) throw new Error("ID1 duplicate station ids: " + dup.join(","));
+		// The pin resolves stations by id, so a duplicate silently points at the wrong one.
+		const mixed = deriveTraceTree({ eventNodes: [
+			{ kind: "turn-error", seq: 2, time: 2, turn: 1, step: 1, message: "x", code: "E" },
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m", blocks: [] }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t).stations.map((x) => x.id);
+		if (new Set(mixed).size !== mixed.length) throw new Error("ID1 duplicate ids across kinds: " + mixed.join(","));
+	}
+
 	// ── BUILD1: src/ and lib/client.js must agree ─────────────────────────────
 	// lib/client.js is GENERATED from src/*.js. Editing the built file directly would
 	// silently diverge from the sources and the next build would erase the fix.

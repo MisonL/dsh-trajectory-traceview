@@ -666,7 +666,8 @@
 
 			const turns = [];
 			const turnMap = new Map();
-			let pendingUser = [];
+const usedStationIds = new Set();
+						let pendingUser = [];
 			let lastTurnEntry = null;
 			const ensureTurn = (turn, seq) => {
 				let e = turnMap.get(turn);
@@ -694,7 +695,14 @@
 					const who = n.kind === "context"
 						? `${t("node.context")}${typeof n.provenance?.producer === "string" && n.provenance.producer !== "" ? ` · ${n.provenance.producer}` : ""}`
 						: t("node.user");
-					const entry = { id: `u${n.seq}`, who, text: textOfContent(n.content), time: n.time, seq: n.seq };
+					// Ids double as React keys and as the selection pin's identity, so they must
+					// be unique. Two user nodes sharing a seq (a malformed/duplicated log)
+					// produced two `u7` stations; suffix the duplicate instead of colliding.
+					const baseId = `u${n.seq}`;
+					let entryId = baseId;
+					for (let dupe = 2; usedStationIds.has(entryId); dupe += 1) entryId = `${baseId}-${String(dupe)}`;
+					usedStationIds.add(entryId);
+					const entry = { id: entryId, who, text: textOfContent(n.content), time: n.time, seq: n.seq };
 					// A user turn that has no assistant/special event yet must still be shown.
 					// Start its turn here when the node declares one; otherwise park it in
 					// `pendingUser` and let the next assistant message's turn adopt it.

@@ -27,7 +27,14 @@
 
 - `docs/DESIGN.md`
 - `docs/PROVENANCE.md`
+- `scripts/build-client.mjs`
 - `scripts/provenance.mjs`
+- `src/00-locale.js`
+- `src/10-styles.js`
+- `src/20-fields.js`
+- `src/30-helpers.js`
+- `src/40-view.js`
+- `src/50-entry.js`
 
 ## 二、`lib/client.js` 函数级
 
