@@ -35,6 +35,7 @@
     "lib/client.js",
     "src/",
     "cordis.patch.yml",
+    "screenshot/",
     "docs/",
     "scripts/",
     "README.md",

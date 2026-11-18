@@ -31,13 +31,33 @@
 			return "";
 		}
 		/** First text block of a ContentBlock list (full text). */
-		function textOfContent(content) {
+		function textOfContent(content, t) {
 			// `for…of` on a non-array throws, and a host payload with a wrong-shaped
 			// `content` (e.g. an object) crashed the whole view. `blocksText` already
 			// guards this way; the two helpers must agree on tolerating bad input.
 			if (!Array.isArray(content)) return "";
-			for (const b of content) if (b && b.type === "text" && typeof b.text === "string" && b.text !== "") return b.text;
-			return "";
+			// ContentBlock is merge-extensible and the host ships seven types. Returning
+			// only the first text block dropped every other kind, so a user message that
+			// was a file or an image rendered as empty. Join all readable parts and label
+			// the ones that have no text, mirroring blocksText.
+			const parts = [];
+			for (const b of content) {
+				if (b == null || typeof b !== "object") continue;
+				if (b.type === "text" && typeof b.text === "string" && b.text !== "") { parts.push(b.text); continue; }
+				if (b.type === "image") { parts.push(typeof t === "function" ? t("block.image") : "image"); continue; }
+				if (b.type === "file") {
+					const name = typeof b.attachment?.name === "string" && b.attachment.name !== "" ? b.attachment.name : null;
+					const label = typeof t === "function" ? t("block.file") : "file";
+					parts.push(name !== null ? `${label}: ${name}` : label);
+					continue;
+				}
+				// Unknown/plugin-added blocks degrade to their type tag instead of vanishing.
+				if (typeof b.type === "string" && b.type !== "") {
+					const label = typeof t === "function" ? t("block.other") : "other";
+					parts.push(`${label} · ${b.type}`);
+				}
+			}
+			return parts.join("\n");
 		}
 		/** Join every text block; images become a visible placeholder. */
 		function blocksText(content, t) {
@@ -727,7 +747,7 @@ const usedStationIds = new Set();
 					let entryId = baseId;
 					for (let dupe = 2; usedStationIds.has(entryId); dupe += 1) entryId = `${baseId}-${String(dupe)}`;
 					usedStationIds.add(entryId);
-					const entry = { id: entryId, who, text: textOfContent(n.content), time: n.time, seq: n.seq };
+					const entry = { id: entryId, who, text: textOfContent(n.content, t), time: n.time, seq: n.seq };
 					// A user turn that has no assistant/special event yet must still be shown.
 					// Start its turn here when the node declares one; otherwise park it in
 					// `pendingUser` and let the next assistant message's turn adopt it.

@@ -1006,6 +1006,29 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── PACK1: README assets and runtime sources must ship in the tarball ─────
+	// `README.md` embeds screenshot/overview.jpg but `files` did not list it, so the
+	// published README rendered a broken image.
+	{
+		const fsP = require("node:fs");
+		const pathP = require("node:path");
+		const root = pathP.join(__dirname, "..");
+		const pkg = JSON.parse(fsP.readFileSync(pathP.join(root, "package.json"), "utf8"));
+		const listed = (rel) => pkg.files.some((f) => (f.endsWith("/") ? rel.startsWith(f) : rel === f));
+		for (const readme of ["README.md", "README.en.md"]) {
+			const body = fsP.readFileSync(pathP.join(root, readme), "utf8");
+			for (const m of body.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)) {
+				const ref = m[1];
+				if (/^https?:/i.test(ref)) continue; // badges are remote by design
+				if (!fsP.existsSync(pathP.join(root, ref))) throw new Error("PACK1 " + readme + " references a missing file: " + ref);
+				if (!listed(ref)) throw new Error("PACK1 " + readme + " references " + ref + " but package.json files does not ship it");
+			}
+		}
+		// The maintainable sources must ship alongside the generated bundle.
+		if (!listed("src/")) throw new Error("PACK1 src/ must be published");
+		if (!listed("scripts/build-client.mjs")) throw new Error("PACK1 the build script must be published");
+	}
+
 	// ── CONTRACT1: fields the host actually provides must be read, not guessed ──
 	{
 		const mkTree = (nodes) => deriveTraceTree({ eventNodes: nodes, requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
@@ -1019,6 +1042,18 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const oth = mkTree([{ kind: "assistant", seq: 1, time: 1, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "other", block: { type: "video" } }] }]);
 		const othCells = oth.stations.filter((x) => x.kind === "step")[0].cells;
 		if (othCells.length !== 1) throw new Error("CONTRACT1 other block was dropped");
+		// USER content blocks: ContentBlock has seven merge-extensible types. Reading only
+		// the first `text` block made a file/image user message look empty.
+		const usr = mkTree([
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "file", attachment: { name: "a.txt" } }] },
+			{ kind: "user", seq: 2, time: 2, content: [{ type: "image" }] },
+			{ kind: "user", seq: 3, time: 3, content: [{ type: "text", text: "hi" }, { type: "file", attachment: { name: "b.txt" } }] }
+		]);
+		const users = usr.stations.filter((x) => x.kind === "user");
+		if (!users.some((u) => String(u.text).includes("a.txt"))) throw new Error("CONTRACT1 a file-only user message rendered empty");
+		if (!users.some((u) => String(u.text).includes("block.image"))) throw new Error("CONTRACT1 an image-only user message rendered empty");
+		const mixed = users.find((u) => String(u.text).startsWith("hi"));
+		if (mixed === void 0 || !String(mixed.text).includes("b.txt")) throw new Error("CONTRACT1 a mixed user message dropped its file part");
 	}
 
 	// ── SEC1: model-supplied links must not reach the DOM with an active scheme ──
