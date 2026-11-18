@@ -1050,6 +1050,31 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!listed("scripts/build-client.mjs")) throw new Error("PACK1 the build script must be published");
 	}
 
+	// ── A11Y3: the filled badge gradient must keep white text readable ────────
+	// White on the bright dark-theme accents measured 1.86–2.60:1. A dedicated
+	// --dstv-grad-a/b pair fixes it, and this guard keeps a future palette edit from
+	// silently reintroducing the bright stops.
+	{
+		const srcA = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "10-styles.js"), "utf8");
+		const lightAt = srcA.indexOf("body:not([data-ds-dark-theme])");
+		const darkDecl = srcA.slice(0, lightAt);
+		const lightDecl = srcA.slice(lightAt, lightAt + 1200);
+		const parseVars = (t) => { const o = {}; for (const m of t.matchAll(/--(dstv-[a-z-]+):(#[0-9a-fA-F]{6})/g)) o[m[1]] = m[2]; return o; };
+		const hx = (h) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+		const linC = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+		const lum = (r) => 0.2126 * linC(r[0]) + 0.7152 * linC(r[1]) + 0.0722 * linC(r[2]);
+		const cr = (a, b) => { const l1 = lum(hx(a)), l2 = lum(hx(b)); const hi = Math.max(l1, l2), lo = Math.min(l1, l2); return (hi + 0.05) / (lo + 0.05); };
+		for (const [label, decl] of [["dark", parseVars(darkDecl)], ["light", parseVars(lightDecl)]]) {
+			for (const key of ["dstv-grad-a", "dstv-grad-b"]) {
+				if (decl[key] === void 0) throw new Error("A11Y3 " + label + " is missing " + key);
+				const r = cr("#ffffff", decl[key]);
+				if (r < 4.5) throw new Error("A11Y3 " + label + " white on " + key + " " + decl[key] + " is " + r.toFixed(2) + ":1 (need 4.5)");
+			}
+		}
+		// The gradient vars must actually be USED, not just declared.
+		if (!/\.dstv_playBtn\{[^}]*var\(--dstv-grad-a\)/.test(srcA)) throw new Error("A11Y3 .dstv_playBtn must use the gradient vars");
+	}
+
 	// ── A11Y2: no rule may paint text in the SAME hue as its own tint ─────────
 	// A colour on a 12–15% tint of itself measured 3.91–4.35:1 (dark) and 4.12–4.31:1
 	// (light) — under 4.5. Every such rule must use the -ink variant. `partial` is the
