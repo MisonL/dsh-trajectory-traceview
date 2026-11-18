@@ -1075,6 +1075,59 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/\.dstv_playBtn\{[^}]*var\(--dstv-grad-a\)/.test(srcA)) throw new Error("A11Y3 .dstv_playBtn must use the gradient vars");
 	}
 
+	// ── PERF4: compaction pairing must not scan every request per compaction ──
+	// Timing was the wrong instrument here (a 96–262 ms spread on this box hid the
+	// difference). Counting PROPERTY ACCESSES is deterministic and shows the shape
+	// directly: quadratic 16,151 / 546,901 visits vs indexed 901 / 5,401 for the same
+	// input. The counter rides on a getter so no source instrumentation is needed.
+	{
+		let visits = 0;
+		const buildC = (n) => {
+			const nodes = []; const requests = []; let s0 = 1;
+			for (let turn = 1; turn <= n; turn += 1) {
+				nodes.push({ kind: "user", seq: s0++, time: 1700000000000 + s0 * 1000, turn, content: [{ type: "text", text: "q" }] });
+				nodes.push({ kind: "assistant", seq: s0++, time: 1700000000000 + s0 * 1000, turn, step: 1, messageId: "m" + turn, blocks: [{ kind: "text", text: "a" }] });
+				const cseq = s0;
+				nodes.push({ kind: "compaction", seq: cseq, time: 1700000000000 + cseq * 1000, summary: "S", shadowedItemCount: 1, shadowedTokenCount: 10 });
+				// Decoys first, exact match LAST, so a linear scan must walk the whole list.
+				for (let k = 0; k < 3; k += 1) {
+					const r = { purpose: "compaction", turn, step: 1, startSeq: s0, status: "ok" };
+					Object.defineProperty(r, "replacementSeq", { get() { visits += 1; return -1; }, enumerable: true });
+					requests.push(r);
+				}
+				const ex = { purpose: "compaction", turn, step: 1, startSeq: s0, status: "ok" };
+				Object.defineProperty(ex, "replacementSeq", { get() { visits += 1; return cseq; }, enumerable: true });
+				requests.push(ex);
+				s0 += 1;
+			}
+			return { eventNodes: nodes, requests, callSchemas: new Map(), runningCalls: [], partial: null };
+		};
+		for (const n of [100, 600]) {
+			visits = 0;
+			deriveTraceTree(buildC(n), t);
+			// Linear: ~4n^2 (16,151 / 546,901). Indexed: ~9n (901 / 5,401).
+			const quadraticAt600 = 4 * 600 * 600;
+			const limit = n === 600 ? 50000 : 3000;
+			if (visits > limit) throw new Error("PERF4 compaction pairing scans every request per compaction: " + visits + " accesses at n=" + n + " (limit " + limit + ", quadratic would be ~" + quadraticAt600 + " at n=600)");
+		}
+		// Speed is a secondary signal; keep it loose so it only catches disasters.
+		const snapC = buildC(600);
+		const b0 = process.hrtime.bigint();
+		deriveTraceTree(snapC, t);
+		const msC = Number(process.hrtime.bigint() - b0) / 1e6;
+		if (msC > 2000) throw new Error("PERF4 600 compactions took " + msC.toFixed(0) + "ms");
+		// Pairing must still WORK, not just be fast.
+		const trC = deriveTraceTree({ eventNodes: [
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "q" }] },
+			{ kind: "compaction", seq: 2, time: 2000, summary: "S", shadowedItemCount: 1, shadowedTokenCount: 10 }
+		], requests: [
+			{ purpose: "compaction", turn: 1, step: 1, replacementSeq: 2, startSeq: 1, status: "ok" },
+			{ purpose: "assistant", turn: 1, step: 1, startSeq: 1, status: "ok" }
+		], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const compC = trC.stations.find((x) => x.kind === "compaction");
+		if (compC === void 0 || compC.crequest == null) throw new Error("PERF4 the compaction request is no longer paired");
+	}
+
 	// ── A11Y2: no rule may paint text in the SAME hue as its own tint ─────────
 	// A colour on a 12–15% tint of itself measured 3.91–4.35:1 (dark) and 4.12–4.31:1
 	// (light) — under 4.5. Every such rule must use the -ink variant. `partial` is the

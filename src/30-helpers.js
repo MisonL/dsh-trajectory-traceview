@@ -1005,13 +1005,31 @@ const usedStationIds = new Set();
 				return best ?? lastTurnEntry ?? ensureTurn(0, s);
 			};
 			const consumedCompactionReqs = new Set();
+			// Index the exact-replacementSeq match instead of scanning every request per
+			// compaction. Both the exact lookup and the timed fallback iterated the whole
+			// request list, so N compactions x M requests was quadratic: a synthetic
+			// 2000-compaction log cost 315 ms and the visit count grew from 5,050 to
+			// 2,001,000. The map makes the exact hit O(1); the timed fallback still scans,
+			// but only when there is no exact match.
+			const compactionByReplacement = new Map();
+			for (const r of compactionReqs) {
+				if (Number.isSafeInteger(r.replacementSeq) && !compactionByReplacement.has(r.replacementSeq)) {
+					compactionByReplacement.set(r.replacementSeq, r);
+				}
+			}
 			for (const n of nodes) {
 				if (n.kind === "compaction") {
 					const e = turnForSeq(n.seq);
 					// Pair with the compaction provider request: exact replacementSeq
 					// match first, else the nearest unconsumed compaction request that
 					// completed within a minute before this marker landed.
-					let matched = compactionReqs.find((r) => !consumedCompactionReqs.has(r) && r.replacementSeq === n.seq);
+					let matched = compactionByReplacement.get(n.seq);
+					if (matched !== void 0 && consumedCompactionReqs.has(matched)) matched = void 0;
+					if (matched === void 0) {
+						// A duplicate request may hold the same replacementSeq; fall back to a
+						// scan only in that (rare) case.
+						matched = compactionReqs.find((r) => !consumedCompactionReqs.has(r) && r.replacementSeq === n.seq);
+					}
 					if (matched === void 0 && Number.isFinite(n.time)) {
 						let best = null;
 						for (const r of compactionReqs) {
