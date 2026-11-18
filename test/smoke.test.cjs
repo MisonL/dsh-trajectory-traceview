@@ -432,7 +432,10 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	const errOrphan = edges.find((x) => x.callId === "orphanErr");
 	const imgOrphan = edges.find((x) => x.callId === "orphanImg");
 	if (errOrphan.displayText !== "E_TIMEOUT") throw new Error("O1 error fallback = " + errOrphan.displayText);
-	if (imgOrphan.displayText !== "[图片]") throw new Error("O1 image text = " + imgOrphan.displayText);
+	// The placeholder must come from the locale, not be hardcoded: the test translator is
+	// identity, so a localized call yields the KEY. A hardcoded literal would leak Chinese
+	// into the English UI, which is exactly what happened here.
+	if (imgOrphan.displayText !== "block.image") throw new Error("O1 image text must be localized, got " + imgOrphan.displayText);
 
 	// A fractional-seq synthetic tool result (interrupted call) must be flagged
 	// synthetic and must NOT get an `e` anchor.
@@ -950,6 +953,7 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			for (let i = 0; i < b; i += 1) out.push({ kind: "tool-result", callId: "x", callTime: 1, time: 2, name: "n", content: [], isError: false, subCalls: mk(d - 1, b) });
 			return out;
 		};
+		// Single root: cap applies.
 		const root = mk(9, 5)[0];
 		const t0 = Date.now();
 		const one = subDetailOf(root, 0);
@@ -957,8 +961,49 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		let count = 0;
 		const walk = (l) => { for (const x of l || []) { count += 1; walk(x.subCalls); } };
 		walk([one]);
-		if (count > 2500) throw new Error("PERF3 sub-call materialisation is unbounded: " + count + " nodes");
-		if (ms > 3000) throw new Error("PERF3 sub-call materialisation too slow: " + ms + "ms");
+		if (count > 2500) throw new Error("PERF3 single-root materialisation is unbounded: " + count + " nodes");
+		if (ms > 3000) throw new Error("PERF3 too slow: " + ms + "ms");
+		// MULTIPLE roots under one tool cell must share ONE budget. The per-root version
+		// materialised 7,775 nodes for 5 roots; the shared version caps at ~2,000.
+		{
+			// 4 roots x (1+8+64+512)=585 = 2,340 nodes: over the shared cap, and cheap
+			// enough that its garbage does not perturb the later P1 timing test.
+			const roots = mk(4, 8).slice(0, 4);
+			const snap = { eventNodes: [
+				{ kind: "assistant", seq: 1, time: 1, messageId: "a", turn: 1, step: 1, blocks: [{ kind: "tool-call", callId: "root", name: "root", argsRaw: "{}" }] },
+				{ kind: "tool-result", seq: 2, time: 2, callId: "root", call: { name: "root", argsRaw: "{}" }, content: [], isError: false, subCalls: roots }
+			], requests: [], callSchemas: new Map(), partial: null, runningCalls: [] };
+			const tree = deriveTraceTree(snap, t);
+			const cell = tree.stations.find((x) => x.kind === "step").cells.find((c) => c.kind === "tool");
+			let total = 0;
+			const walk2 = (l) => { for (const x of l || []) { total += 1; walk2(x.subCalls); } };
+			walk2(cell.subCalls);
+			if (total > 2100) throw new Error("PERF3 the budget must be SHARED across all roots of one tool cell, got " + total + " nodes");
+		}
+	}
+
+	// ── I18N2: English output must carry no CJK characters ────────────────────
+	// The image placeholder and the compaction note were hardcoded in Chinese, so the
+	// English UI leaked "『上下文压缩：…』" and "[图片]". Behavioural check beats a
+	// source scan: run the real functions with the real `en` dictionary.
+	{
+		const en = (() => {
+			const srcE = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+			const a = srcE.indexOf("const en = {");
+			const blockE = srcE.slice(a, srcE.indexOf("\n\t\t};", a));
+			const out = {};
+			for (const m of blockE.matchAll(/"([a-zA-Z][\w.]*)":\s*"((?:[^"\\]|\\.)*)"/g)) out[m[1]] = JSON.parse(`"${m[2]}"`);
+			return out;
+		})();
+		const enT = (k) => (en[k] !== void 0 ? en[k] : k);
+		const msgs = reconstructMessages([
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "hi" }, { type: "image" }] },
+			{ kind: "compaction", seq: 2, time: 2, summary: "SUM", shadowedItemCount: 1, shadowedTokenCount: 1000 }
+		], 99, enT);
+		const cjk = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
+		for (const m of msgs) {
+			if (cjk.test(m.text)) throw new Error("I18N2 English output contains CJK: " + JSON.stringify(m.text));
+		}
 	}
 
 	// ── ID1: station ids must be unique (React keys + selection pin identity) ──
@@ -1839,15 +1884,18 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			}
 		}
 		const bigSnap = { eventNodes: big, requests: [], callSchemas: new Map(), runningCalls: [], partial: null };
-		deriveTraceTree(bigSnap, t); // warm up the JIT so the assertion measures steady state
+		// Several warm-up passes: earlier perf cases in this file leave garbage that a
+		// single pass does not settle, and one warm-up made a 195 ms baseline flap
+		// against a 250 ms budget.
+		for (let w = 0; w < 4; w += 1) deriveTraceTree(bigSnap, t);
 		const samples = [];
-		for (let i = 0; i < 7; i += 1) {
+		for (let i = 0; i < 9; i += 1) {
 			const built = process.hrtime.bigint();
 			deriveTraceTree(bigSnap, t);
 			samples.push(Number(process.hrtime.bigint() - built) / 1e6);
 		}
 		samples.sort((a, b) => a - b);
-		const median = samples[3];
+		const median = samples[4];
 		if (median > 250) throw new Error("P1 projection of " + big.length + " nodes took " + median.toFixed(1) + " ms median (budget 250 ms)");
 		// The fold must not pre-materialize search text: that is what made it slow.
 		const probe = deriveTraceTree({ eventNodes: [

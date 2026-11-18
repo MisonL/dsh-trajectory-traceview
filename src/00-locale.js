@@ -3,6 +3,13 @@
 		const NS = "trajectoryTraceView";
 		/** Simplified Chinese dictionary (the key-set source of truth). */
 		const zh = {
+			"note.wrapL": "『", "note.wrapM": "（", "note.wrapR": "）』",
+			"block.image": "[图片]",
+			"note.compaction": "上下文压缩：",
+			"note.compacted": "历史已压缩",
+			"note.replace": "替换",
+			"note.items": "项",
+			"note.about": "约",
 			"view.label": "轨迹视图",
 			"view.root": "会话轨迹",
 			"view.incompatible": "无法识别当前会话的轨迹数据格式（可能是 DSH 版本不兼容）",
@@ -162,6 +169,13 @@
 		};
 		/** English dictionary. */
 		const en = {
+			"note.wrapL": "", "note.wrapM": " (", "note.wrapR": ")",
+			"block.image": "[image]",
+			"note.compaction": "Context compacted: ",
+			"note.compacted": "history compacted",
+			"note.replace": "replaced",
+			"note.items": "item(s)",
+			"note.about": "about",
 			"view.label": "Trace View",
 			"view.root": "Session Trace",
 			"view.incompatible": "Cannot recognize this session's trajectory data (DSH version may be incompatible)",

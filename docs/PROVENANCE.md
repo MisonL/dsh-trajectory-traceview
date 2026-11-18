@@ -38,14 +38,13 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**13 个原样保留、11 个被修改、0 个被删除**；本仓**新增 30 个**。
+上游 24 个函数：**11 个原样保留、13 个被修改、0 个被删除**；本仓**新增 31 个**。
 
-### 原样保留（13）
+### 原样保留（11）
 
 未做任何改动，可与上游逐字对照：
 
 - `CopyBtn`
-- `blocksText`
 - `copyText`
 - `decodeRateOf`
 - `firstLine`
@@ -54,16 +53,16 @@
 - `normalizeUsage`
 - `prettyArgs`
 - `prettyJson`
-- `reconstructMessages`
 - `subName`
 - `toolGlyph`
 
-### 已修改（11）
+### 已修改（13）
 
 **这些是二开最容易与前人意图冲突的地方**——功能骨架来自上游，但行为已被改变。每处都应在 `docs/DESIGN.md` 里找得到"为什么改"的记录：
 
 - `TraceMapView`
 - `apply`
+- `blocksText`
 - `buildTraceMarkdown`
 - `deriveTraceTree`
 - `fmtDur`
@@ -71,10 +70,11 @@
 - `matchStations`
 - `newStepState`
 - `promptDiffOf`
+- `reconstructMessages`
 - `subDetailOf`
 - `textOfContent`
 
-### 本仓新增（30）
+### 本仓新增（31）
 
 上游完全没有：
 
@@ -91,6 +91,7 @@
 - `evidenceOf`
 - `fencedBlock`
 - `isEverythingUnknown`
+- `mapSubCalls`
 - `markdownToPlain`
 - `mdBlocks`
 - `mdInline`
