@@ -225,7 +225,7 @@ Substantive changes versus upstream: stable anchors and deep-link parsing, orpha
 ---
 
 > **Disclaimer**: This plugin is a local learning / debugging tool. The authors are not responsible for any decision made based on trace data (including approximately rebuilt message payloads); please don't share session traces containing sensitive content on shared / multi-user screens.
-## 11. Versioning
+## 14. Versioning
 
 **Baseline**: forked from upstream `v0.3.0` (commit `2d1d07d`, 2026-08-26); upstream has not published since. This repo has evolved independently from `0.4.0`.
 
