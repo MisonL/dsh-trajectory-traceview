@@ -982,6 +982,30 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── I18N3: no CJK literal may survive outside the locale tables ──────────
+	// `m.role === "note" ? "压缩" : m.role` painted a Chinese role name in the English
+	// Raw-request panel. Scanning the sources is the only way to catch a one-off literal
+	// like that before a user sees it, so keep the check structural rather than per-string.
+	{
+		const fsI = require("node:fs");
+		const pathI = require("node:path");
+		const cjk = /[\u4e00-\u9fff]/;
+		const offenders = [];
+		for (const file of ["30-helpers.js", "40-view.js", "20-fields.js", "50-entry.js", "10-styles.js"]) {
+			const lines = fsI.readFileSync(pathI.join(__dirname, "..", "src", file), "utf8").split("\n");
+			let inBlock = false;
+			lines.forEach((line, i) => {
+				const t = line.trim();
+				if (inBlock) { if (t.includes("*/")) inBlock = false; return; }
+				if (t.startsWith("/*")) { if (!t.includes("*/")) inBlock = true; return; }
+				if (t.startsWith("//")) return;
+				const code = line.replace(/\/\/.*$/, "");
+				if (cjk.test(code)) offenders.push(file + ":" + (i + 1) + " " + t.slice(0, 80));
+			});
+		}
+		if (offenders.length > 0) throw new Error("I18N3 CJK literal outside the locale tables:\n  " + offenders.join("\n  "));
+	}
+
 	// ── I18N2: English output must carry no CJK characters ────────────────────
 	// The image placeholder and the compaction note were hardcoded in Chinese, so the
 	// English UI leaked "『上下文压缩：…』" and "[图片]". Behavioural check beats a

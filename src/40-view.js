@@ -1629,7 +1629,7 @@
 						jsx("div", { className: "dstv_dBody", style: { padding: 0 }, children: messages.map((m, i) => {
 							const preview = m.text !== "" ? m.text : (m.role === "tool" ? `${m.toolCallId ?? ""}${m.isError ? " ✗" : ""}` : "…");
 							return jsxs("details", { className: "dstv_det", open: i === messages.length - 1, children: [
-								jsx("summary", { children: [jsx("span", { className: `dstv_msgRole ${m.role}`, children: m.role === "note" ? "压缩" : m.role }, "mr"), jsx("span", { className: "dstv_msgPrev", children: firstLine(preview) }, "mp"), jsx("span", { className: "sub", children: String(m.text.length) }, "ml")] }, `ms${i}`),
+								jsx("summary", { children: [jsx("span", { className: `dstv_msgRole ${m.role}`, children: m.role === "note" ? t("node.compaction") : m.role }, "mr"), jsx("span", { className: "dstv_msgPrev", children: firstLine(preview) }, "mp"), jsx("span", { className: "sub", children: String(m.text.length) }, "ml")] }, `ms${i}`),
 								jsx("div", { className: "inner", children: jsx("div", { className: "dstv_code", style: { maxHeight: 200 }, children: m.text !== "" ? m.text : JSON.stringify(m.content, null, 2) }, "mc") }, `mi${i}`)
 							] }, `m${i}`);
 						}) }, "mList")
