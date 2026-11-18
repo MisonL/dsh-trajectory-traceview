@@ -1050,6 +1050,25 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!listed("scripts/build-client.mjs")) throw new Error("PACK1 the build script must be published");
 	}
 
+	// ── A11Y2: no rule may paint text in the SAME hue as its own tint ─────────
+	// A colour on a 12–15% tint of itself measured 3.91–4.35:1 (dark) and 4.12–4.31:1
+	// (light) — under 4.5. Every such rule must use the -ink variant. `partial` is the
+	// one exception because it already clears 4.5 on its own tint in both themes.
+	{
+		const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "10-styles.js"), "utf8");
+		const rules = css.match(/\.[a-zA-Z0-9_.\[\]="' -]+\{[^}]+\}/g) || [];
+		const exempt = new Set(["partial"]);
+		const offenders = [];
+		for (const rule of rules) {
+			const c = /color:var\(--dstv-([a-z]+)\)/.exec(rule);
+			const b = /background:color-mix\(in srgb,var\(--dstv-([a-z]+)\)/.exec(rule);
+			if (!c || !b || c[1] !== b[1]) continue;
+			if (exempt.has(c[1])) continue;
+			offenders.push(c[1] + " in " + rule.slice(0, 60));
+		}
+		if (offenders.length > 0) throw new Error("A11Y2 text on its own tint must use -ink:\n  " + offenders.join("\n  "));
+	}
+
 	// ── CONTRACT1: fields the host actually provides must be read, not guessed ──
 	{
 		const mkTree = (nodes) => deriveTraceTree({ eventNodes: nodes, requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
