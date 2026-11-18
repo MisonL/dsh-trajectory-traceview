@@ -1006,6 +1006,27 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── EXPORT1: a fence in prose must not swallow the rest of the export ────
+	// `cell.text` was pushed raw. Model output that explains code contains ```, and an
+	// unclosed triple-backtick turned every following tool call into a code block — the
+	// export silently lost content instead of rendering it.
+	{
+		const snap = { eventNodes: [
+			{ kind: "assistant", seq: 2, time: 1700000001000, turn: 1, step: 1, messageId: "m", blocks: [
+				{ kind: "text", text: "Here is a fence:\n```\nunclosed" },
+				{ kind: "tool-call", callId: "c1", name: "bash", argsRaw: "{}" }
+			] },
+			{ kind: "tool-result", seq: 3, time: 1700000003000, callId: "c1", call: { name: "bash", argsRaw: "{}" }, callTime: 1700000001000, content: [{ type: "text", text: "REAL_RESULT" }], isError: false, subCalls: [] }
+		], requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+		const tree = deriveTraceTree(snap, t);
+		const md = buildStepMarkdown(tree.stations.filter((x) => x.kind === "step")[0], [], false, t);
+		const blocks = mdBlocks(md);
+		// The tool heading must survive as its own paragraph, not be eaten by a fence.
+		const flat = blocks.filter((b) => b.type === "p").map((b) => String(b.text ?? "")).join("\n");
+		if (!flat.includes("bash")) throw new Error("EXPORT1 the tool heading was swallowed by an unescaped fence");
+		if (!md.includes("REAL_RESULT")) throw new Error("EXPORT1 the tool result was swallowed by an unescaped fence");
+	}
+
 	// ── PACK1: README assets and runtime sources must ship in the tarball ─────
 	// `README.md` embeds screenshot/overview.jpg but `files` did not list it, so the
 	// published README rendered a broken image.
