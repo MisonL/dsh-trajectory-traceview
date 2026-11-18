@@ -3655,3 +3655,38 @@ Codex 第五轮报：英文 Raw request 面板的角色名显示"压缩"。
 | `I18N3` | 源码里没有 locale 之外的 CJK 字面量（结构级） |
 
 三层叠加：字典对齐 → 运行时输出 → 源码扫描。
+
+### 12.67 Codex 终审 SOUND + 后台计时器修复（2026-11-18）
+
+Codex 以 `worker_done` 结束，基于 HEAD `33a96ba` 出终审报告（`/tmp/traceview-audit-9b1519f/final-report.md`），六个维度全部 **SOUND**：Security / Theming-contrast / i18n / Accessibility / Performance-lifecycle / Contract-future kinds。
+
+我没有直接采信这份结论，抽查了它引用的关键断言：
+
+| 报告断言 | 我的抽查 |
+|---|---|
+| 无 `innerHTML`/`eval` | 只有 2 处，都是注释说明"不使用" |
+| 有 `role=listbox` + `aria-orientation` + roving tabIndex | 确认 1/1/4 处 |
+| station 键盘处理支持 Arrow/Home/End/Space 并 stopPropagation | 确认 |
+| `content-visibility` 生效 | 确认 |
+| interval 均有 cleanup | 4 个 setInterval / 5 个 clearInterval（多出的是防御性 clear） |
+| `provenance.mjs --check` exit 0 | 确认 |
+
+#### 报告未覆盖、我补做的一项
+
+Codex 说 lifecycle SOUND，但我复查时发现一个它没测的**真实浪费**：
+
+- 流式重建计时器每 **120ms** 重建整棵轨迹树，**标签页隐藏时照跑**
+- 回放计时器同样在后台推进
+
+对没人看的文档持续计费。已修：两个 interval 回调在 `document.visibilityState === "hidden"` 时直接 return，回到前台的下一个 tick 自然追上。
+
+真机回归确认**没有把回放改坏**：点击播放后选区 1 → 3 正常推进，按钮在 `▶`/`❚❚` 之间切换，`visibilityState` 为 `visible`。
+
+新增 `PERF5` 守卫（源级检查两个 tick 都有守卫，变异删掉其中一个即红）。
+
+#### Codex 报告自己声明未覆盖的边界
+
+- 未把宿主升级到未验证的 DSH 版本
+- 未让真实模型产生新的 image/file 内容，只用隔离 fixture / 合成快照
+
+这两点也是我的边界，如实记录。
