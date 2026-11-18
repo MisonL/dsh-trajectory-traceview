@@ -3230,3 +3230,70 @@ Error: Z2 rendering the empty snapshot threw:
 一条从没红过的测试，和没有测试的区别只是心理安慰。Z2 上线前我做的第一件事是拿真实缺陷版本去喂它——它红了，我才认为它有价值。
 
 这个检查应该对每一条新断言都做。这一整个会话里，我有过多次"断言写太弱、变异没变红"的经历（`anchorLoadTarget`、死代码守卫、`textOfContent` 返回值比较），Z2 是第一个**主动拿历史缺陷验证**的例子。
+
+### 12.58 真机终于恢复：同一个 bug 的第二次修复（2026-11-18）
+
+宿主会话侧故障持续了十几个小时，这轮恢复了（`retry:false`，会话正常打开，轨迹页 50 站正常渲染）。**立刻做了一直做不了的验证，结果证明上一轮那个修复仍然是错的。**
+
+#### 一、真机复现
+
+选中第 8 站（锚点 `tvp1:e29532`，步骤 7），点「加载更早历史」：
+
+| | 站点数 | 选中索引 | 选中锚点 |
+|---|---|---|---|
+| 加载前 | 51 | 8 | `tvp1:e29532` |
+| 加载后（0.9.26/0.9.27） | 114 | 8 | **`tvp1:e28913`** ← 变成步骤 6 |
+
+**位置没变，内容变了。** 这正是我要修的那个 bug，而它还在。
+
+#### 二、根因（第二次修正）
+
+```js
+const selectedStationId = revealed === null ? null
+  : (stations[revealed - 1]?.id ?? null);
+useEffect(() => { selectedIdRef.current = selectedStationId; }, [selectedStationId]);
+```
+
+历史前插后 `revealed` 不变，但 `stations` 变了 → `selectedStationId` **变成了新列表同位置上的另一个 id** → effect 立刻用错 id 覆盖了记录 → 后面的修复 effect 拿错 id 去查，自然"确认"了错误的站点。
+
+我上轮（§12.55）把 id 改成稳定 `anchorSeq` 是对的，但**记录时机仍然是错的**。
+
+修法：记录只在**用户选择变化**时发生，绝不因站点列表变化而重跑。
+
+```js
+const prevRevealedRef = react.useRef(revealed);
+useEffect(() => {
+  const selectionChanged = prevRevealedRef.current !== revealed;
+  prevRevealedRef.current = revealed;
+  if (!selectionChanged) return;
+  selectedIdRef.current = revealed === null ? null : (stationsRef.current[...]?.id ?? null);
+}, [revealed]);
+```
+
+#### 三、真机复验
+
+| | 加载前 | 加载后 |
+|---|---|---|
+| 站点数 | 56 | 119 |
+| 选中索引 | 8 | **71** |
+| 选中锚点 | `e29532` | **`e29532`** ✓ |
+
+索引跟着记录走了——这才是"保持选中同一条记录"。
+
+#### 四、变异
+
+删掉 `if (!selectionChanged) return;` **不会变红**（因为依赖数组仍是 `[revealed]`，effect 本来就不会重跑）——这个变异是伪的。真正有效的变异是**把整段还原成旧实现**（依赖 `[selectedStationId]`），它变红了：`X1-o the pin must record only on a selection change`。
+
+记这一笔是因为：**变异必须改变行为，而不是改变代码形状**。我前面已经踩过同类坑。
+
+#### 五、这一条的意义
+
+同一个 bug 我修了两次，两次都以为修好了：
+
+- 第一次（§12.53）用不稳定 id → 无效
+- 第二次（§12.55）id 改稳了，但记录时机错 → 仍然无效
+- 第三次（本条）真机验证 → 生效
+
+**中间那两次，如果我有真机可验，都不会发生。** 而"没有真机可验"在长达十几个小时里是我的常态——所以我用 SSR/纯函数铺了再多测试，也覆盖不到 effect 的依赖时序。
+
+结论：**这种依赖时序 bug 只能靠真实渲染 + 真实状态变化来发现，静态测试和组件 SSR 都无能为力**（SSR 只跑一次渲染，不跑 effect 重跑）。

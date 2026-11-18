@@ -1107,6 +1107,19 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 		if (enterBranch === null) throw new Error("X1-k the typed anchor jump must mirror into the URL");
 		if (!/nextHashFor\(location\.hash, wanted\)/.test(enterBranch[1])) throw new Error("X1-k the URL must be derived from the jumped anchor");
 
+		// X1-o: the identity-recording effect must fire ONLY on a selection change.
+		// Depending on the derived id made it re-run after a backwards page (same
+		// position, different station) and overwrite the pin with the wrong station.
+		// Verified live: e29532 silently became e28913 when history loaded.
+		{
+			const srcO = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+			if (!/const selectionChanged = prevRevealedRef\.current !== revealed;/.test(srcO)) throw new Error("X1-o the pin must record only on a selection change");
+			if (/\}, \[selectedStationId\]\);/.test(srcO)) throw new Error("X1-o recording must not depend on the derived id");
+			if (!/\}, \[revealed\]\);/.test(srcO)) throw new Error("X1-o recording must depend on revealed alone");
+			// The id is read through the ref so paging cannot re-trigger the effect.
+			if (!/selectedIdRef\.current = revealed === null \? null/.test(srcO)) throw new Error("X1-o the pin must be recorded from the live list");
+		}
+
 		// X1-n: round-3 findings.
 		{
 			// blocks: [null] must not throw inside the fold.
