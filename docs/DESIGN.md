@@ -3576,3 +3576,42 @@ Codex 第五次复验指出 `compactionReqs.find(...)` 每个 compaction 都从�
 我第一次验证"配对是否仍然工作"时用了 `{turn,step,replacementSeq}` 的请求形状，结果 `crequest` 永远为空。**不是代码问题**——`compactionReqs` 只收 `purpose === "compaction"` 的请求。补上 `purpose` 后正常配对。
 
 教训：探针形状不对会伪装成代码缺陷。两次都是我先怀疑代码、后怀疑探针。
+
+### 12.65 导出与安装态的真机端到端验证（2026-11-18）
+
+#### 导出（真机，非单元测试）
+
+在真实宿主里点「复制 Markdown」，拦截 `navigator.clipboard.writeText` 抓到真实产物：
+
+| 指标 | 值 |
+|---|---|
+| 长度 | 289,084 字符 / 4,495 行 |
+| 状态机检查围栏配对 | **未闭合围栏：无** |
+| 最长连续反引号串 | 5（导出器按内容自动加长围栏） |
+| 站点深链引用 | 存在（`tvp1:`） |
+
+第一次粗测用"以 ``` 开头的行数是否为偶数"判断配对，得到 `false`——**这个判据是错的**：5 个反引号的围栏要用 5 个闭合，按 3 个计数自然对不上。改用逐行状态机后确认无未闭合。
+
+#### 安装态
+
+直接从宿主抓取实际下发的 bundle：
+
+```
+bundle: plugins/??dsh-trajectory-traceview-plus/client.js&rev=29a24a247064
+served 249,495 字节 = 本地 lib/client.js 前 249,495 字节（逐字节相同）
+差异仅在尾部：宿主附加 "\n;\n" + sourceMappingURL
+```
+
+逐项查找本轮所有新代码（`compactionByReplacement`、`safeHref`、`block.file`、`note.wrapL`、`mapSubCalls`、`dstv-grad-a`、`anchor.searchingPages`、导出转义）**全部存在于宿主下发的内容中**。
+
+#### 本轮真机验证汇总
+
+| 项目 | 结果 |
+|---|---|
+| 响应式 6 个断点 | 无横向溢出 |
+| 深链 `tvp1:t2s1` | 定位成功，101 秒（已加进度反馈） |
+| 导出 Markdown | 289KB，结构完整 |
+| 暗色/亮色对比度 | 全部 ≥4.5（暗色 ink 7.32–8.52，亮色 6.71–8.25） |
+| 危险协议链接 | 0 个 |
+| minimap/传输按钮无障碍名 | 64/64、8/8 |
+| 错误边界 | 未触发 |
