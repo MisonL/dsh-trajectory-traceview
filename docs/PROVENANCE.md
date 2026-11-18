@@ -38,7 +38,7 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**11 个原样保留、13 个被修改、0 个被删除**；本仓**新增 31 个**。
+上游 24 个函数：**11 个原样保留、13 个被修改、0 个被删除**；本仓**新增 32 个**。
 
 ### 原样保留（11）
 
@@ -74,7 +74,7 @@
 - `subDetailOf`
 - `textOfContent`
 
-### 本仓新增（31）
+### 本仓新增（32）
 
 上游完全没有：
 
@@ -101,6 +101,7 @@
 - `pushSubLines`
 - `renderMdInline`
 - `resolveAnchorInStations`
+- `safeHref`
 - `safeJsonPreview`
 - `safeList`
 - `searchScopeNote`

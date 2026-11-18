@@ -5,6 +5,7 @@
 		const zh = {
 			"note.wrapL": "『", "note.wrapM": "（", "note.wrapR": "）』",
 			"block.image": "[图片]",
+			"block.other": "[其他内容]",
 			"note.compaction": "上下文压缩：",
 			"note.compacted": "历史已压缩",
 			"note.replace": "替换",
@@ -171,6 +172,7 @@
 		const en = {
 			"note.wrapL": "", "note.wrapM": " (", "note.wrapR": ")",
 			"block.image": "[image]",
+			"block.other": "[other content]",
 			"note.compaction": "Context compacted: ",
 			"note.compacted": "history compacted",
 			"note.replace": "replaced",

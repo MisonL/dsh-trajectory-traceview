@@ -713,8 +713,12 @@ const usedStationIds = new Set();
 
 			for (const n of nodes) {
 				if (n.kind === "user" || n.kind === "steering" || n.kind === "context") {
+					// The contract puts the label at `producer.label` (ContextProducerView),
+					// NOT under `provenance`. Reading the wrong path meant every context row
+					// rendered a bare "上下文注入" and the producer name was never shown.
+					const producerLabel = typeof n.producer?.label === "string" && n.producer.label !== "" ? n.producer.label : null;
 					const who = n.kind === "context"
-						? `${t("node.context")}${typeof n.provenance?.producer === "string" && n.provenance.producer !== "" ? ` · ${n.provenance.producer}` : ""}`
+						? `${t("node.context")}${producerLabel !== null ? ` · ${producerLabel}` : ""}`
 						: t("node.user");
 					// Ids double as React keys and as the selection pin's identity, so they must
 					// be unique. Two user nodes sharing a seq (a malformed/duplicated log)
@@ -777,6 +781,14 @@ const usedStationIds = new Set();
 							st.cells.push({ id: `a${n.seq}${st.cells.length}`, kind: "assistant", text: b.text, thinking: "" });
 						} else if (b.kind === "reasoning" && typeof b.text === "string" && b.text !== "") {
 							st.cells.push({ id: `r${n.seq}${st.cells.length}`, kind: "assistant", text: "", thinking: b.text });
+						} else if (b.kind === "image" || b.kind === "other") {
+							// AssistantBlock also has `image` and `other`. The adapters are
+							// text-only today, but dropping these silently made a future image
+							// reply look like the model produced nothing. Surface a placeholder
+							// instead; it is honest and costs one cell.
+							const label = b.kind === "image" ? t("block.image")
+								: `${t("block.other")}${typeof b.block === "object" && b.block !== null && typeof b.block.type === "string" ? ` · ${b.block.type}` : ""}`;
+							st.cells.push({ id: `o${n.seq}${st.cells.length}`, kind: "assistant", text: label, thinking: "" });
 						} else if (b.kind === "tool-call") {
 							const res = resultsById.get(b.callId);
 							if (attachedCallIds.has(b.callId)) continue;
@@ -945,11 +957,17 @@ const usedStationIds = new Set();
 			// Compaction/command nodes carry no turn number: seat them by seq range —
 			// the turn whose first event seq is the greatest one not after the event.
 			const turnsBySeq = [...turns].sort((a, b) => a.seq - b.seq);
+			// Binary search: `turnsBySeq` is already sorted. The previous linear scan ran
+			// once per compaction/special event, so a log with many of both cost
+			// O(events x turns) — measured 105 ms at 1000 turns, and it grows from there.
 			const turnForSeq = (s) => {
+				let lo = 0;
+				let hi = turnsBySeq.length - 1;
 				let best = null;
-				for (const e of turnsBySeq) {
-					if (e.seq <= s) best = e;
-					else break;
+				while (lo <= hi) {
+					const mid = (lo + hi) >> 1;
+					if (turnsBySeq[mid].seq <= s) { best = turnsBySeq[mid]; lo = mid + 1; }
+					else hi = mid - 1;
 				}
 				return best ?? lastTurnEntry ?? ensureTurn(0, s);
 			};

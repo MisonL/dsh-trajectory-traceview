@@ -1006,6 +1006,52 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── CONTRACT1: fields the host actually provides must be read, not guessed ──
+	{
+		const mkTree = (nodes) => deriveTraceTree({ eventNodes: nodes, requests: [], callSchemas: {}, runningCalls: {}, partial: null }, t);
+		// `producer.label` lives at the node top level, not under `provenance`.
+		const ctx = mkTree([{ kind: "context", seq: 3, time: 1, content: [{ type: "text", text: "x" }], source: {}, producer: { role: "inject", label: "AUDIT_PRODUCER" }, form: "notice" }]);
+		if (!String(ctx.stations[0].who).includes("AUDIT_PRODUCER")) throw new Error("CONTRACT1 producer.label not surfaced: " + ctx.stations[0].who);
+		// AssistantBlock image/other must not vanish without a trace.
+		const img = mkTree([{ kind: "assistant", seq: 1, time: 1, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "hi" }, { kind: "image", attachment: {} }] }]);
+		const imgCells = img.stations.filter((x) => x.kind === "step")[0].cells;
+		if (imgCells.length !== 2) throw new Error("CONTRACT1 image block was dropped: " + imgCells.length + " cells");
+		const oth = mkTree([{ kind: "assistant", seq: 1, time: 1, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "other", block: { type: "video" } }] }]);
+		const othCells = oth.stations.filter((x) => x.kind === "step")[0].cells;
+		if (othCells.length !== 1) throw new Error("CONTRACT1 other block was dropped");
+	}
+
+	// ── SEC1: model-supplied links must not reach the DOM with an active scheme ──
+	// `renderMdInline` put `p.href` straight into an <a href>. React does not sanitise
+	// URLs, so a `javascript:` link in a transcript was clickable and executed.
+	{
+		const React2 = require("react");
+		const { renderToStaticMarkup } = require("react-dom/server");
+		const srcS = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		const a = srcS.indexOf("function mdInline(src) {");
+		const b = srcS.indexOf("function MarkdownText({ text }) {");
+		const box = { React: React2, console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, isFinite, parseInt, parseFloat, Date, RegExp };
+		require("node:vm").runInNewContext("const jsx = React.createElement, jsxs = React.createElement;\n" + srcS.slice(a, b) + ";globalThis.__r = { renderMdInline, mdInline };", box, { timeout: 60000 });
+		const render = (md) => renderToStaticMarkup(box.__r.renderMdInline(box.__r.mdInline(md), "k"));
+		const dangerous = [
+			"[evil](javascript:alert(1))",
+			"[spaced]( JavaScript:alert(1))",
+			"[nl](java\nscript:alert(1))",
+			"[vb](vbscript:msgbox)",
+			"[data](data:text/html,x)"
+		];
+		for (const md of dangerous) {
+			const html = render(md);
+			if (/<a\b/i.test(html)) throw new Error("SEC1 active link rendered for " + JSON.stringify(md) + ": " + html);
+			if (/href=/i.test(html)) throw new Error("SEC1 href leaked for " + JSON.stringify(md));
+		}
+		// Legitimate links must still work, otherwise the fix is just "break links".
+		for (const md of ["[ok](https://example.com)", "[m](mailto:a@b.c)", "[r](/rel)"]) {
+			const html = render(md);
+			if (!/<a\b[^>]*href=/.test(html)) throw new Error("SEC1 legitimate link was dropped: " + md + " -> " + html);
+		}
+	}
+
 	// ── ID1: station ids must be unique (React keys + selection pin identity) ──
 	{
 		const dup = deriveTraceTree({ eventNodes: [

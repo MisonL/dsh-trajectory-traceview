@@ -56,12 +56,37 @@
 		 * `dangerouslySetInnerHTML`, so model output can never become markup. Links get
 		 * `rel="noreferrer noopener"` because the target came from the transcript.
 		 */
+		/**
+		 * Allowlist for links taken from the transcript. `http(s)` and `mailto` are inert;
+		 * angle-bracket-free relative URLs are allowed too. Everything else — notably
+		 * `javascript:` and `vbscript:` — returns null so the caller renders text instead.
+		 * The check is done on a whitespace/control-stripped, lowercased copy, because
+		 * `java\nscript:` and leading spaces are the usual bypasses.
+		 */
+		function safeHref(raw) {
+			const s = String(raw ?? "").replace(/[\u0000-\u0020\u007f]+/g, "");
+			if (s === "") return null;
+			// A bare relative reference has no scheme at all.
+			if (/^[#/?]/.test(s)) return raw;
+			const m = /^([a-z][a-z0-9+.-]*):/i.exec(s);
+			if (m === null) return raw;
+			const scheme = m[1].toLowerCase();
+			return scheme === "http" || scheme === "https" || scheme === "mailto" ? raw : null;
+		}
 		function renderMdInline(parts, keyBase) {
 			return parts.map((p, i) => {
 				const k = keyBase + "i" + i;
 				if (p.t === "code") return jsx("code", { className: "dstv_mdCode", children: p.text }, k);
 				if (p.t === "strong") return jsx("strong", { className: "dstv_mdBold", children: p.text }, k);
-				if (p.t === "link") return jsx("a", { className: "dstv_mdLink", href: p.href, target: "_blank", rel: "noreferrer noopener", children: p.text }, k);
+				if (p.t === "link") {
+					// The href comes from MODEL OUTPUT. React does not sanitise URLs, so a
+					// `javascript:` or `vbscript:` link was rendered into the DOM verbatim and
+					// ran on click. Allow only inert schemes; anything else degrades to text
+					// (never to a guessed "safe" URL).
+					const href = safeHref(p.href);
+					if (href === null) return jsx("span", { className: "dstv_mdLinkBlocked", children: p.text }, k);
+					return jsx("a", { className: "dstv_mdLink", href, target: "_blank", rel: "noreferrer noopener", children: p.text }, k);
+				}
 				return p.text;
 			});
 		}
@@ -614,7 +639,7 @@
 			// Lazy: rebuild the model-visible message list only for the selected step.
 			// (Hook sits above the empty-state early return so hook order never changes.)
 			const activeReqStartSeq = activeStation !== void 0 && activeStation.kind === "step" && activeStation.request !== null ? activeStation.request.startSeq : null;
-			const activeMessages = (0, react.useMemo)(() => (activeReqStartSeq != null ? reconstructMessages(tree.nodes ?? [], activeReqStartSeq) : []), [activeReqStartSeq, tree.nodes]);
+			const activeMessages = (0, react.useMemo)(() => (activeReqStartSeq != null ? reconstructMessages(tree.nodes ?? [], activeReqStartSeq, t) : []), [activeReqStartSeq, tree.nodes]);
 			/**
 			 * The "copy this step" Markdown is built from every tool result in the step, so
 			 * it is expensive (663 ms for a 256 KB result — 100% of that render). It is only
@@ -687,7 +712,10 @@
 					if (searchRef.current !== null && typeof searchRef.current.focus === "function") { searchRef.current.focus(); ev.preventDefault(); }
 					return;
 				}
-				if (k === " " && tag === "button") return;
+				// Space activates buttons, summaries (toggle <details>) and links by
+				// default. The old guard excluded only `button`, so pressing Space on a
+				// `<summary>` both toggled the section and started playback.
+				if (k === " " && (tag === "button" || tag === "summary" || tag === "a")) return;
 				if (k === "ArrowRight") { stepNext(); ev.preventDefault(); }
 				else if (k === "ArrowLeft") { stepPrev(); ev.preventDefault(); }
 				else if (k === "Home") { toStart(); ev.preventDefault(); }
