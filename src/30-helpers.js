@@ -591,6 +591,36 @@
 		 * (Strings are primitives: `a === b` cannot tell "rebuilt" from "identity", so the
 		 * decision is returned as an explicit flag instead of being inferred by the caller.)
 		 */
+		/**
+		 * Deduplicate concurrent work keyed by a string.
+		 *
+		 * The anchor search is started from two places (the URL/focus effect and the
+		 * typed-Enter handler) and its driving effect also depends on `N`, which grows
+		 * with every page it loads — so one request could spawn several concurrent
+		 * 40-page searches. Each keeps its own page counter, which is why the progress
+		 * text was seen moving backwards (25 -> 23 -> 11 -> 20) while one `t2s1` lookup
+		 * ran for 133 s; the host's own network time for that run was only 8.7 s.
+		 *
+		 * Only an IDENTICAL key is blocked: a different anchor must be allowed to
+		 * supersede an in-flight one, otherwise typing a new target would be silently
+		 * ignored while the old search kept paging.
+		 */
+		function createFlightGuard() {
+			let current = "";
+			return {
+				tryStart(key) {
+					const k = String(key ?? "");
+					if (k !== "" && current === k) return false;
+					current = k;
+					return true;
+				},
+				finish(key) {
+					// Keyed: a request that was superseded must not clear the newer one.
+					if (current === String(key ?? "")) current = "";
+				},
+				current() { return current; }
+			};
+		}
 		function nextHashFor(hash, anchor) {
 			const body = typeof anchor === "string" ? anchor : "";
 			if (body === "") return { hash: hash, changed: false };

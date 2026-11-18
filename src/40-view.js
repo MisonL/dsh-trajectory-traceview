@@ -506,12 +506,19 @@
 				else setAnchorNote(null);
 				return true;
 			}, [t, loadOlder]);
+			// One search at a time, whichever entry point asked for it (see
+			// createFlightGuard: only an identical anchor is deduplicated).
+			const anchorFlight = (0, react.useMemo)(() => createFlightGuard(), []);
+			const anchorApplyGuarded = (raw) => {
+				if (!anchorFlight.tryStart(raw)) return Promise.resolve(false);
+				return Promise.resolve(anchorApply(raw)).finally(() => anchorFlight.finish(raw));
+			};
 			(0, react.useEffect)(() => {
 				if (N === 0) return;
 				const wanted = (anchorToApply !== null && anchorToApply !== "") ? anchorToApply : anchorInput.trim();
 				if (wanted === "") return;
 				let cancelled = false;
-				void anchorApply(wanted).then((ok) => {
+				void anchorApplyGuarded(wanted).then((ok) => {
 					if (cancelled) return;
 					// a successful landing becomes shareable: mirror it into the URL
 					if (ok && typeof location !== "undefined") {
@@ -872,7 +879,7 @@
 										// URL-driven path used to do this, so pressing Enter left
 										// the old hash in place and the next arriving station
 										// re-applied it, snatching the selection back.
-										void anchorApply(wanted).then((ok) => {
+										void anchorApplyGuarded(wanted).then((ok) => {
 											if (!ok || typeof location === "undefined") return;
 											const next = nextHashFor(location.hash, wanted);
 											if (next.changed !== true) return;

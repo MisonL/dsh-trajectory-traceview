@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -980,6 +980,28 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			walk2(cell.subCalls);
 			if (total > 2100) throw new Error("PERF3 the budget must be SHARED across all roots of one tool cell, got " + total + " nodes");
 		}
+	}
+
+	// ── ANCHOR2: one anchor search at a time, but never a stuck one ──────────
+	// The search is started from the URL/focus effect AND from typed Enter, and its
+	// driving effect re-fires as `N` grows. Concurrent searches each kept their own page
+	// counter — the progress text was observed going 25 -> 23 -> 11 -> 20 and one
+	// `t2s1` lookup took 133 s while the host's own network time was 8.7 s.
+	{
+		const g = createFlightGuard();
+		// The same anchor twice: the second must be refused.
+		if (g.tryStart("tvp1:t2s1") !== true) throw new Error("ANCHOR2 first start must be allowed");
+		if (g.tryStart("tvp1:t2s1") !== false) throw new Error("ANCHOR2 a duplicate start must be refused");
+		// A DIFFERENT anchor must be allowed to supersede — refusing it would make a new
+		// target silently ignored while the old search kept paging.
+		if (g.tryStart("tvp1:t5s1") !== true) throw new Error("ANCHOR2 a new anchor must be able to supersede");
+		// The superseded request finishing must NOT clear the newer one.
+		g.finish("tvp1:t2s1");
+		if (g.current() !== "tvp1:t5s1") throw new Error("ANCHOR2 a superseded finish must not clear the newer guard");
+		if (g.tryStart("tvp1:t5s1") !== false) throw new Error("ANCHOR2 the newer guard must still be in place");
+		// Finishing the current one releases it so the SAME anchor can run again.
+		g.finish("tvp1:t5s1");
+		if (g.tryStart("tvp1:t5s1") !== true) throw new Error("ANCHOR2 a completed search must be restartable");
 	}
 
 	// ── PERF5: timers that drive redraws must idle while the tab is hidden ────
