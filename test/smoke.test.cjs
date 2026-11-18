@@ -940,6 +940,69 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (!/if \(anchorCoveredByWindow\(parsed, stationsRef\.current\)\) break;/.test(src)) throw new Error("N1 the paging loop must stop on coverage");
 	}
 
+	// ── PERF3: nested sub-calls must be budgeted, not just depth-capped ───────
+	// SUB_CALL_MAX_DEPTH bounds recursion but NOT breadth: 5 siblings x 9 levels
+	// copied 2.4 million nodes and took 12.7 s. A shared per-root budget fixes it.
+	{
+		const mk = (d, b) => {
+			if (d === 0) return [];
+			const out = [];
+			for (let i = 0; i < b; i += 1) out.push({ kind: "tool-result", callId: "x", callTime: 1, time: 2, name: "n", content: [], isError: false, subCalls: mk(d - 1, b) });
+			return out;
+		};
+		const root = mk(9, 5)[0];
+		const t0 = Date.now();
+		const one = subDetailOf(root, 0);
+		const ms = Date.now() - t0;
+		let count = 0;
+		const walk = (l) => { for (const x of l || []) { count += 1; walk(x.subCalls); } };
+		walk([one]);
+		if (count > 2500) throw new Error("PERF3 sub-call materialisation is unbounded: " + count + " nodes");
+		if (ms > 3000) throw new Error("PERF3 sub-call materialisation too slow: " + ms + "ms");
+	}
+
+	// ── BUILD1: src/ and lib/client.js must agree ─────────────────────────────
+	// lib/client.js is GENERATED from src/*.js. Editing the built file directly would
+	// silently diverge from the sources and the next build would erase the fix.
+	{
+		const cp = require("node:child_process");
+		const r = cp.spawnSync(process.execPath, [require("node:path").join(__dirname, "..", "scripts", "build-client.mjs"), "--check"], { encoding: "utf8" });
+		if (r.status !== 0) throw new Error("BUILD1 lib/client.js does not match src/ — run `node scripts/build-client.mjs`\n" + (r.stderr || "") + (r.stdout || ""));
+	}
+
+	// ── PERF2: tooltips and the copy-button payload must stay bounded ─────────
+	{
+		const srcP = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/const TITLE_PREVIEW_CHARS = \d+;/.test(srcP)) throw new Error("PERF2 title previews need an explicit bound");
+		// A `title` carrying the full args pushed 14.6 MB of markup for 480 long calls.
+		const fullArgTitles = [...srcP.matchAll(/title: [^,\n]*\bcell\.args\b(?![^,\n]*slice)/g)];
+		if (fullArgTitles.length > 0) throw new Error("PERF2 a title must not carry the full args: " + fullArgTitles.length + " site(s)");
+		// The copy payload is expensive and only read on click; it must be memoised.
+		if (!/const stepMarkdown = \(0, react\.useMemo\)/.test(srcP)) throw new Error("PERF2 buildStepMarkdown must be memoised");
+		if (!/text: stepMarkdown,/.test(srcP)) throw new Error("PERF2 the copy button must use the memoised payload");
+		if (/text: buildStepMarkdown\(activeStation, activeMessages/.test(srcP)) throw new Error("PERF2 the copy payload is being rebuilt inline again");
+	}
+
+	// ── PERF1: mdInline must stay linear ──────────────────────────────────────
+	// Unmatched markers used to rescan to end-of-string per position: 64K `[` = 221 ms,
+	// 256K = 2.6 s. These strings feed card previews on every render.
+	{
+		const sized = (n) => "[".repeat(n);
+		const time = (n) => { const t0 = Date.now(); mdInline(sized(n)); return Date.now() - t0; };
+		// Absolute budget, not a ratio: at these sizes the linear version needs a few ms,
+		// so a ratio against a single-digit baseline is pure timer noise (this check first
+		// flapped between red and green because of exactly that). The quadratic original
+		// took ~2.6 s here, so 400 ms leaves a wide margin while still catching a relapse.
+		time(65536); // warm up
+		const large = time(262144);
+		if (large > 400) throw new Error("PERF1 mdInline is super-linear: 256K unmatched markers took " + large + "ms (linear code needs a few ms; the quadratic version took ~2600ms)");
+		// And the parse must still be correct.
+		const md = mdInline("**b** `c` [l](u)");
+		if (md.map((x) => x.t).join(",") !== "strong,text,code,text,link") throw new Error("PERF1 mdInline lost syntax after the rewrite: " + JSON.stringify(md));
+		const unclosed = mdInline("[abc");
+		if (unclosed.length !== 1 || unclosed[0].text !== "[abc") throw new Error("PERF1 an unmatched bracket must stay literal text");
+	}
+
 	// ── Z2: the component must actually RENDER ────────────────────────────────
 	// The smoke suite only ever executed pure helpers inside a vm, so a render-time
 	// crash (0.9.23–0.9.25: `ReferenceError: Cannot access 'activeStation' before
@@ -1286,8 +1349,12 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	// the real page showed the same text duplicated in `.dstv_chip.warn`.
 	{
 		const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
-		const uses = (src.match(/children: anchorNote/g) || []).length;
-		if (uses !== 1) throw new Error("N2 anchorNote must render exactly once, found " + uses);
+		// Visually the note must appear exactly once. One extra reference is allowed ONLY
+		// inside the visually-hidden aria-live region, which is how screen readers hear it.
+		const visual = (src.match(/children: anchorNote/g) || []).length
+			- (src.match(/"aria-live": "polite"[^}]*children: anchorNote/g) || []).length;
+		if (visual !== 1) throw new Error("N2 anchorNote must render visually exactly once, found " + visual);
+		if ((src.match(/aria-live/g) || []).length > 2) throw new Error("N2 too many live regions");
 		if (!/className: "dstv_chip warn", title: anchorNote, children: anchorNote/.test(src)) throw new Error("N2 the single note belongs in the header, with a title");
 		// Same rule for the incompatibility/drift notes: a duplicated status line is noise.
 		const warns = (src.match(/anchorNote !== null \?/g) || []).length;
@@ -1661,9 +1728,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// theme, which is exactly how the 1.7:1 light-mode chips happened.
 		// Strip the palette declarations themselves, then any hex left is a colour that
 		// bypasses the theme.
-		const paletteDefs = new Set([...src.matchAll(/--(?:dstv-[a-z]+):(#[0-9a-fA-F]{6})/g)].map((m) => m[1].toLowerCase()));
+		// The name part allows hyphens: `--dstv-ok-ink` is a palette entry too, and the
+		// old `[a-z]+` skipped it, so every new ink colour looked like a stray hex.
+		const paletteDefs = new Set([...src.matchAll(/--(?:dstv-[a-z-]+):(#[0-9a-fA-F]{6})/g)].map((m) => m[1].toLowerCase()));
 		const strayHex = (src.match(/#[0-9a-fA-F]{6}\b/g) || []).map((h) => h.toLowerCase()).filter((h) => !paletteDefs.has(h));
 		if (strayHex.length > 0) throw new Error("A1 colours must go through vars, found: " + [...new Set(strayHex)].join(" "));
+
+		// A chip paints its OWN hue at 14% behind its text. The base colour measured
+		// 3.98:1 on that wash (dark violet) even though it passed against the page, so
+		// each role must ALSO have an -ink variant that clears 4.5:1 on its own tint.
+		{
+			const all = src;
+			const mix = (fg, bg, pct) => "#" + [0, 1, 2].map((i) => Math.round(parseInt(fg.slice(1 + i * 2, 3 + i * 2), 16) * pct + parseInt(bg.slice(1 + i * 2, 3 + i * 2), 16) * (1 - pct)).toString(16).padStart(2, "0")).join("");
+			const darkDecl = {}, lightDecl = {};
+			for (const m of paletteSlice.matchAll(/--(dstv-[a-z-]+):(#[0-9a-fA-F]{6})/g)) darkDecl[m[1]] = m[2];
+			for (const m of lightSlice.matchAll(/--(dstv-[a-z-]+):(#[0-9a-fA-F]{6})/g)) lightDecl[m[1]] = m[2];
+			for (const role of ["ok", "err", "warn", "unknown", "info"]) {
+				for (const [label, decl, surface] of [["dark", darkDecl, DARK_SURFACE], ["light", lightDecl, LIGHT_SURFACE]]) {
+					const ink = decl["dstv-" + role + "-ink"];
+					const base = decl["dstv-" + role];
+					if (ink === void 0) throw new Error("A1 " + label + " is missing --dstv-" + role + "-ink");
+					if (base === void 0) throw new Error("A1 " + label + " is missing --dstv-" + role);
+					const wash = mix(base, surface, 0.14);
+					const r = ratio(ink, wash);
+					if (r < 4.5) throw new Error("A1 " + label + " --dstv-" + role + "-ink " + ink + " is " + r.toFixed(2) + ":1 on its own 14% tint (need 4.5)");
+				}
+			}
+		}
 		if (paletteDefs.size < 12) throw new Error("A1 expected both palettes to declare the full role set");
 
 		// Tints must derive from the palette too, otherwise the light theme's text is
@@ -1682,7 +1773,10 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 
 		if (!/role: "listbox"/.test(src)) throw new Error("A1 the timeline must expose listbox semantics");
 		if (!/role: "option"/.test(src)) throw new Error("A1 each station must be an option");
-		if (!/"aria-selected": revealed === null \? undefined/.test(src)) throw new Error("A1 aria-selected must be omitted in overview and set once a station is selected");
+		// ARIA 1.2 requires aria-selected on EVERY role="option". The old assertion pinned
+		// the opposite (omit it in overview), which made screen readers guess the state.
+		if (!/"aria-selected": revealed === null \? "false"/.test(src)) throw new Error("A1 every option must expose aria-selected, including in overview");
+		if (!/isActive \? "true" : "false"/.test(src)) throw new Error("A1 the selected station must still report true");
 		if (!/stationAriaLabel\(s, i \+ 1, N, t\)/.test(src)) throw new Error("A1 stations need an accessible name");
 		if (!/tabIndex: isActive \|\| \(revealed === null && i === 0\) \? 0 : -1/.test(src)) throw new Error("A1 roving tabindex must keep exactly one station tabbable");
 		if (!/stationOnKeyDown\(ev, i\)/.test(src)) throw new Error("A1 stations must handle arrow keys");
