@@ -1045,6 +1045,41 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (checked < 3) throw new Error("ANCHOR3 expected several stations to check, got " + checked);
 	}
 
+	// ── STEER1: a steering message interjects, it does not open a new turn ────
+	// The official layout places `steering` at `lastAssistantTurn` when no assistant
+	// follows it; only `user` opens a turn. Filing a trailing steering message under
+	// the invented "next" turn created a whole extra turn at the tail of the window
+	// that never existed in the session.
+	{
+		const turnOf = (snap, needle) => {
+			const tr = deriveTraceTree(snap, t);
+			const turn = tr.children.find((c) => c.children.some((x) => (x.text || "").includes(needle)));
+			return turn === void 0 ? null : turn.label;
+		};
+		const base = (extra) => ({ eventNodes: [
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "q1" }] },
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "a1" }] },
+			...extra
+		], requests: [], callSchemas: new Map(), runningCalls: [], partial: null });
+		// Trailing steering: stays in turn 1, no phantom turn 2.
+		const trailing = base([{ kind: "steering", seq: 3, time: 3, content: [{ type: "text", text: "插话" }] }]);
+		if (turnOf(trailing, "插话") !== "node.turn 1") {
+			throw new Error("STEER1 trailing steering opened its own turn: " + turnOf(trailing, "插话"));
+		}
+		const trT = deriveTraceTree(trailing, t);
+		if (trT.children.length !== 1) {
+			throw new Error("STEER1 trailing steering invented a turn (" + trT.children.length + " turns)");
+		}
+		// A real user message still opens the next turn, and takes steering with it.
+		const followed = base([
+			{ kind: "steering", seq: 3, time: 3, content: [{ type: "text", text: "插话" }] },
+			{ kind: "user", seq: 4, time: 4, content: [{ type: "text", text: "q2" }] },
+			{ kind: "assistant", seq: 5, time: 5, turn: 2, step: 1, messageId: "m2", blocks: [{ kind: "text", text: "a2" }] }
+		]);
+		if (turnOf(followed, "q2") !== "node.turn 2") throw new Error("STEER1 a user message must still open the next turn");
+		if (turnOf(followed, "插话") !== "node.turn 2") throw new Error("STEER1 steering must follow the turn it interjects into");
+	}
+
 	// ── ANCHOR2: one anchor search at a time, but never a stuck one ──────────
 	// The search is started from the URL/focus effect AND from typed Enter, and its
 	// driving effect re-fires as `N` grows. Concurrent searches each kept their own page
