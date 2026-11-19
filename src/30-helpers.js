@@ -414,6 +414,25 @@
 			return null;
 		}
 		/**
+		 * Does this station's own anchor resolve back to THIS station?
+		 *
+		 * `e<seq>` identifies a SEQ, and one seq can carry several stations: a `turn-error`
+		 * is stamped with the turn's end seq, which can equal the assistant message's seq,
+		 * and a malformed log can repeat a seq outright. The resolver deliberately prefers
+		 * a step (that is what anchors are normally copied from), so an error card offered
+		 * a "copy anchor" button that, pasted back, jumped to the STEP instead — the user
+		 * copied identity A and landed on record B.
+		 *
+		 * Callers use this to avoid handing out an anchor that does not come back.
+		 */
+		function anchorResolvesToSelf(station, stations) {
+			if (station == null || !Array.isArray(stations)) return false;
+			const a = anchorOf(station);
+			if (a === null) return false;
+			const back = resolveAnchorInStations(parseAnchor(a), stations);
+			return back.ok === true && back.station != null && back.station.id === station.id;
+		}
+		/**
 		 * Parse an anchor string. Pure: returns a discriminated result, never throws.
 		 * Forms follow the grammar above; every legal form has a branch.
 		 */

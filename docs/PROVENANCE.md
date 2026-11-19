@@ -38,7 +38,7 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**11 个原样保留、13 个被修改、0 个被删除**；本仓**新增 34 个**。
+上游 24 个函数：**11 个原样保留、13 个被修改、0 个被删除**；本仓**新增 35 个**。
 
 ### 原样保留（11）
 
@@ -74,7 +74,7 @@
 - `subDetailOf`
 - `textOfContent`
 
-### 本仓新增（34）
+### 本仓新增（35）
 
 上游完全没有：
 
@@ -82,6 +82,7 @@
 - `anchorCoveredByWindow`
 - `anchorLoadTarget`
 - `anchorOf`
+- `anchorResolvesToSelf`
 - `anchorSeqFloor`
 - `anchorTurnFloor`
 - `annotateNamelessFormFields`

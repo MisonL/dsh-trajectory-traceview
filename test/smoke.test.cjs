@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -980,6 +980,31 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			walk2(cell.subCalls);
 			if (total > 2100) throw new Error("PERF3 the budget must be SHARED across all roots of one tool cell, got " + total + " nodes");
 		}
+	}
+
+	// ── ANCHOR4: never offer an anchor that comes back to a DIFFERENT record ──
+	// `e<seq>` names a seq, and one seq can carry several stations: a turn-error is
+	// stamped with the turn's end seq, which equals the assistant message's seq, and a
+	// malformed log can repeat one outright. The resolver deliberately prefers a step,
+	// so the error card's "copy anchor" button handed out an identity that jumped to the
+	// step when pasted.
+	{
+		const trJ = deriveTraceTree({ eventNodes: [
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "q" }] },
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] },
+			{ kind: "turn-error", seq: 2, time: 3, turn: 1, step: 1, message: "boom" }
+		], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const stepJ = trJ.stations.find((x) => x.kind === "step");
+		const errJ = trJ.stations.find((x) => x.kind === "error");
+		if (stepJ === void 0 || errJ === void 0) throw new Error("ANCHOR4 fixture did not produce a colliding pair");
+		if (anchorOf(stepJ) !== anchorOf(errJ)) throw new Error("ANCHOR4 fixture is not actually colliding");
+		if (anchorResolvesToSelf(stepJ, trJ.stations) !== true) throw new Error("ANCHOR4 the step's own anchor must resolve to itself");
+		if (anchorResolvesToSelf(errJ, trJ.stations) !== false) {
+			throw new Error("ANCHOR4 the error card claims its anchor comes back to itself, but it lands on the step");
+		}
+		// A normal, unambiguous station must still be offered.
+		const userJ = trJ.stations.find((x) => x.kind === "user");
+		if (anchorResolvesToSelf(userJ, trJ.stations) !== true) throw new Error("ANCHOR4 an unambiguous anchor must stay available");
 	}
 
 	// ── PREFIX1: prepending history must not renumber what is already on screen ──

@@ -1727,6 +1727,12 @@
 							(() => {
 								const av = anchorOf(activeStation);
 								if (av === null) return null;
+								// Do not offer an anchor that does not come back to THIS card:
+								// `e<seq>` names a seq, and one seq can carry several stations
+								// (a turn-error shares the assistant's seq). The resolver prefers
+								// the step, so this button used to copy an identity that jumped
+								// to a different record when pasted.
+								if (!anchorResolvesToSelf(activeStation, stations)) return null;
 								return jsx("span", { className: "dstv_anchorWrap", title: av, children: jsx(CopyBtn, { text: av, label: `🔗 ${t("anchor.copy")}`, okLabel: t("anchor.copied") }, "dAnchor") }, "dAnchorWrap");
 							})(),
 							activeStation.synthetic === true ? jsx("span", { className: "dstv_chip warn", children: t("anchor.notPersisted") }, "dSynth") : null,
