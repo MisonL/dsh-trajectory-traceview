@@ -1045,6 +1045,49 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (checked < 3) throw new Error("ANCHOR3 expected several stations to check, got " + checked);
 	}
 
+	// ── MD2: raw prose must not restructure the exported document ─────────────
+	// Prose is emitted unwrapped so emphasis and lists survive, which means anything
+	// structural inside it lands in the document verbatim. Two things bit us: a run of
+	// 3+ backticks opens a fence and swallows every following block (a stream cut off
+	// mid-answer leaves an UNCLOSED one that eats the rest of the file), and a literal
+	// `</details>` closes the collapsible block we opened around reasoning.
+	{
+		// Fence state machine: a fence closes only on a run at least as long as the one
+		// that opened it. Counting "lines starting with ```" is even/odd is wrong —
+		// 4- and 5-backtick fences are legal and were previously miscounted.
+		const audit = (md) => {
+			let depth = 0, open = 0, close = 0;
+			for (const line of md.split("\n")) {
+				const m = /^(`{3,})/.exec(line);
+				if (m) { if (depth === 0) depth = m[1].length; else if (m[1].length >= depth) depth = 0; continue; }
+				if (depth === 0) {
+					open += (line.match(/<details>/g) || []).length;
+					close += (line.match(/<\/details>/g) || []).length;
+				}
+			}
+			return { depth, open, close };
+		};
+		const cases = [
+			["unclosed fence", [{ kind: "text", text: "看这段：\n```python\nprint(1)" }]],
+			["details in reasoning", [{ kind: "reasoning", text: "模型说：</details> 继续" }, { kind: "text", text: "正文" }]],
+			["details in prose", [{ kind: "text", text: "<details><summary>假</summary>正文" }]],
+			["five-backtick run", [{ kind: "text", text: "`````js\nlet x=1;" }]]
+		];
+		for (const [name, blocks] of cases) {
+			const trM = deriveTraceTree({ eventNodes: [
+				{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "q ```开" }] },
+				{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks },
+				{ kind: "assistant", seq: 3, time: 3, turn: 2, step: 1, messageId: "m2", blocks: [{ kind: "text", text: "后续" }] }
+			], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+			const stepM = trM.stations.find((x) => x.kind === "step");
+			for (const [label, md] of [["trace", buildTraceMarkdown(trM, t)], ["step", buildStepMarkdown(stepM, [], false, t)]]) {
+				const a = audit(md);
+				if (a.depth !== 0) throw new Error("MD2 " + label + "/" + name + ": content after the text was swallowed by an unclosed fence (open run " + a.depth + ")");
+				if (a.open !== a.close) throw new Error("MD2 " + label + "/" + name + ": <details> unbalanced " + a.open + "/" + a.close);
+			}
+		}
+	}
+
 	// ── STEER1: a steering message interjects, it does not open a new turn ────
 	// The official layout places `steering` at `lastAssistantTurn` when no assistant
 	// follows it; only `user` opens a turn. Filing a trailing steering message under
