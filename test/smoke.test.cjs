@@ -237,7 +237,12 @@ const liveSnap = {
 	runningCalls: [{ callId: "r1", name: "web_search", argsRaw: '{"q":"dsh"}', time: 2500, turn: 3, step: 2, subCalls: [] }]
 };
 const liveTree = deriveTraceTree(liveSnap, t);
-if (liveTree.currentStepNo !== 1) throw new Error("live currentStepNo: " + liveTree.currentStepNo);
+// The header number is the PER-TURN step (2), not the window-wide ordinal (1).
+// The old assertion encoded the bug: this fixture's step is turn 3 / step 2, its
+// card label reads "步骤 2", and the header simultaneously said "当前 步骤 1" —
+// two different numbers for one record. It also drifted on its own: paging older
+// history pushed the same streaming reply from "步骤 3" to "步骤 11".
+if (liveTree.currentStepNo !== 2) throw new Error("live currentStepNo: " + liveTree.currentStepNo);
 if (liveTree.stats.running !== 1) throw new Error("live running count: " + liveTree.stats.running);
 const liveStep = liveTree.stations.find((s) => s.kind === "step");
 if (!liveStep || liveStep.live !== true) throw new Error("live step flag missing");
@@ -979,6 +984,37 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			const walk2 = (l) => { for (const x of l || []) { total += 1; walk2(x.subCalls); } };
 			walk2(cell.subCalls);
 			if (total > 2100) throw new Error("PERF3 the budget must be SHARED across all roots of one tool cell, got " + total + " nodes");
+		}
+	}
+
+	// ── PREFIX2: the header number must survive history paging ────────────────
+	// `currentStepNo` came from the window-wide `stepCounter` while the station's own
+	// label used the per-turn number. Two consequences: the header said "当前 步骤 1"
+	// next to a card labelled "步骤 2" (one record, two numbers), and the same streaming
+	// reply renumbered itself from "步骤 3" to "步骤 11" as older history loaded.
+	{
+		const liveSnapOf = (turns) => {
+			const nodes = []; let s0 = 1;
+			for (let i = 1; i <= turns; i += 1) {
+				nodes.push({ kind: "user", seq: s0++, time: 1000 + s0, turn: i, content: [{ type: "text", text: "q" + i }] });
+				nodes.push({ kind: "assistant", seq: s0++, time: 1000 + s0, turn: i, step: 1, messageId: "m" + i, blocks: [{ kind: "text", text: "a" + i }] });
+			}
+			return { eventNodes: nodes, requests: [], callSchemas: new Map(), runningCalls: [], partial: { turn: turns + 1, step: 1, blocks: [{ kind: "text", text: "live" }] } };
+		};
+		const small = deriveTraceTree(liveSnapOf(2), t);
+		const large = deriveTraceTree(liveSnapOf(10), t);
+		if (small.currentStepNo !== 1) throw new Error("PREFIX2 a first step of its turn must be numbered 1, got " + small.currentStepNo);
+		if (large.currentStepNo !== small.currentStepNo) {
+			throw new Error("PREFIX2 paging history renumbered the live step: " + small.currentStepNo + " -> " + large.currentStepNo);
+		}
+		// The header number and the station's own label must agree on the same record.
+		for (const trP of [small, large]) {
+			const liveStep = trP.stations.find((x) => x.kind === "step" && x.live === true);
+			if (liveStep === void 0) throw new Error("PREFIX2 fixture has no live step");
+			const own = Number.isFinite(liveStep.turnStep) ? liveStep.turnStep : liveStep.stepNo;
+			if (trP.currentStepNo !== own) {
+				throw new Error("PREFIX2 header says step " + trP.currentStepNo + " but the card says step " + own);
+			}
 		}
 	}
 
@@ -2563,25 +2599,61 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 				big.push({ kind: "tool-result", seq: s0++, time: 1000 * s0, callId: "c" + (s0 - 1), call: { name: "read", argsRaw: "{}" }, content: [{ type: "text", text: "y".repeat(2000) }], isError: false, subCalls: [] });
 			}
 		}
-		const bigSnap = { eventNodes: big, requests: [], callSchemas: new Map(), runningCalls: [], partial: null };
-		// Several warm-up passes: earlier perf cases in this file leave garbage that a
-		// single pass does not settle, and one warm-up made a 195 ms baseline flap
-		// against a 250 ms budget.
-		for (let w = 0; w < 4; w += 1) deriveTraceTree(bigSnap, t);
-		const samples = [];
-		for (let i = 0; i < 9; i += 1) {
-			const built = process.hrtime.bigint();
-			deriveTraceTree(bigSnap, t);
-			samples.push(Number(process.hrtime.bigint() - built) / 1e6);
+		// MACHINE-INDEPENDENT: assert the SCALING, not the wall clock.
+		//
+		// An absolute budget cannot work here. On this box the same fixture measured
+		// 96 ms min vs 262 ms max with no code change; wall clock best-of-9 still
+		// flapped (151 ms best vs 350 ms worst) and the 250 ms budget failed on a run
+		// that had not regressed at all — measured CPU time for that same fold was
+		// 50 ms best / 169 ms worst. Two runs on the same machine differ by 3x, so any
+		// absolute number is a coin flip.
+		//
+		// What we actually care about is the SHAPE: doubling the input must roughly
+		// double the cost (linear), not quadruple it (accidental O(n²)). That ratio is
+		// a property of the code and holds regardless of how loaded the machine is.
+		// Measured here: 4,500 -> 9,000 nodes = 1.60x, 9,000 -> 18,000 = 1.97x.
+		const cpuMsOf = (snap) => {
+			// Warm-up: earlier perf cases leave garbage that one pass does not settle.
+			for (let w = 0; w < 3; w += 1) deriveTraceTree(snap, t);
+			let best = Infinity;
+			for (let i = 0; i < 7; i += 1) {
+				const before = process.cpuUsage();
+				deriveTraceTree(snap, t);
+				const used = process.cpuUsage(before);
+				const ms = (used.user + used.system) / 1000;
+				if (ms < best) best = ms;
+			}
+			return best;
+		};
+		const half = [];
+		{
+			let s1 = 1;
+			for (let turn = 1; turn <= 100; turn += 1) {
+				half.push({ kind: "user", seq: s1++, time: 1000 * s1, turn, content: [{ type: "text", text: "q" + turn }] });
+				for (let step = 1; step <= 15; step += 1) {
+					half.push({ kind: "assistant", seq: s1++, time: 1000 * s1, turn, step, blocks: [
+						{ kind: "text", text: "x".repeat(200) },
+						{ kind: "tool-call", callId: "c" + s1, name: "read", argsRaw: "{}" }
+					] });
+					half.push({ kind: "tool-result", seq: s1++, time: 1000 * s1, callId: "c" + (s1 - 1), call: { name: "read", argsRaw: "{}" }, content: [{ type: "text", text: "y".repeat(2000) }], isError: false, subCalls: [] });
+				}
+			}
 		}
-		samples.sort((a, b) => a - b);
-		// Use the BEST sample, not the median. This box runs other work concurrently, so
-		// the same code measured 96 ms min vs 262 ms max on identical input — a median
-		// assertion flapped between pass and fail with no code change. The minimum is the
-		// least-contended run and still catches a real regression: a 2x slowdown shows up
-		// in every sample, not just the unlucky ones.
-		const best = samples[0];
-		if (best > 250) throw new Error("P1 projection of " + big.length + " nodes took " + best.toFixed(1) + " ms best-of-9 (budget 250 ms)");
+		const smallMs = cpuMsOf({ eventNodes: half, requests: [], callSchemas: new Map(), runningCalls: [], partial: null });
+		const bigMs = cpuMsOf({ eventNodes: big, requests: [], callSchemas: new Map(), runningCalls: [], partial: null });
+		// Guard the measurement itself: if the small case is too fast to time reliably,
+		// the ratio is noise and asserting on it would be a false signal.
+		if (smallMs < 3) throw new Error("P1 the small fixture folded in " + smallMs.toFixed(2) + " ms — too fast to measure a ratio");
+		const ratio = bigMs / smallMs;
+		// Linear ≈ 2.0 (measured 1.6–2.0). Quadratic ≈ 4.0. 3.0 leaves room for
+		// measurement noise while still failing a real O(n^2) blow-up.
+		if (ratio > 3) {
+			throw new Error("P1 projection scales worse than linear: " + half.length + " nodes " + smallMs.toFixed(1)
+				+ " ms -> " + big.length + " nodes " + bigMs.toFixed(1) + " ms (ratio " + ratio.toFixed(2) + ", linear ~2, quadratic ~4)");
+		}
+		// Keep a VERY loose absolute ceiling as a second net: it must catch a catastrophic
+		// blow-up (seconds, not milliseconds) without flapping on a loaded machine.
+		if (bigMs > 3000) throw new Error("P1 projection of " + big.length + " nodes took " + bigMs.toFixed(0) + " ms of CPU (ceiling 3000 ms)");
 		// The fold must not pre-materialize search text: that is what made it slow.
 		const probe = deriveTraceTree({ eventNodes: [
 			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "findme" }] }

@@ -1357,7 +1357,18 @@ const usedStationIds = new Set();
 					if (piece.kind === "step") {
 						const st = piece.data;
 						stepCounter += 1;
-						if (st.live === true && currentStepNo === null) currentStepNo = stepCounter;
+						// The LABEL must be the per-turn number, for exactly the reason the
+						// station label was: `stepCounter` is a window-wide counter, so the
+						// header read "current step 3" and then "current step 11" for the SAME
+						// streaming reply once older history was paged in. `stepCounter` stays
+						// as the internal ordinal (and `totalSteps`), the user-visible number
+						// comes from `turnStep`.
+						// Use `piece.stepNum`: the station object is built further below, so
+						// `st` (the raw accumulator) has no `turnStep` yet — reading it here
+						// silently fell through to the window-wide counter.
+						if (st.live === true && currentStepNo === null) {
+							currentStepNo = Number.isFinite(piece.stepNum) ? piece.stepNum : stepCounter;
+						}
 						// attach request info (messages are reconstructed lazily in the component)
 						const key = `${e.turn}:${piece.stepNum}`;
 						const found = requestsByStep.get(key);
