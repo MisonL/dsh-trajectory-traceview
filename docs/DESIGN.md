@@ -4518,3 +4518,95 @@ React 复用 DOM 节点 → 用户展开的那一行显示的是另一条消息�
 - 仍无真实浏览器。`MINITAB1` 数的是 `react-dom/server` 输出里的 `tabindex` 属性，不是真的按 Tab 键走一遍。
 - `MSGKEY1` 验证的是 key 字符串的稳定性，不是真实的 DOM 复用行为（那需要真实 React 协调过程）。
 - `client.js` 拆分、真机响应式、npm 发布仍未动。
+
+### 12.81 第十三轮：宿主吞掉的失败，插件读成了成功（2026-11-20）
+
+这轮第一次真正去读宿主源码，而不是只看插件的假设。结论是：**上一轮我"修好"的那个 catch 分支，根本到不了。**
+
+#### 事实
+
+`dsh-api-session-controller/src/client/sessions/session.ts:432`：
+
+```js
+async loadOlder(options) {
+  const request = this.prepareOlder()
+  await request?.promise          // ← 内部 try/catch，从不 reject
+  ...
+}
+
+// prepareOlder 内部：
+request.promise = (async () => {
+  try {
+    await events.prepend(...)
+    ...
+  } catch (error) {
+    request.page = null
+    this.historyLoadStatus = 'error'   // ← 只翻状态
+    ...
+  }
+})()
+```
+
+合同文档也这么写：*"failures and no progress set snapshot.historyLoadStatus to error"*。**它不 reject。**
+
+#### 插件的错误推断
+
+```js
+loadOlder: async () => {
+  const before = session.getSnapshot();
+  await session.loadOlder();
+  return session.getSnapshot() !== before;   // ← 判"有没有进展"
+}
+```
+
+`getSnapshot()` 是缓存引用，但 `markDirty()` 之后下次调用必然重建（`notifier.ensureFresh()`）。**失败页也 markDirty**，所以也返回新对象。实测复刻宿主契约：
+
+```
+=== 成功翻页 ===   moved: true   ✓
+=== 失败翻页 ===   宿主 loadOlder 是否 reject: false
+                   包装器返回 moved: true   ← 失败被当成"有进展"
+```
+
+#### 两个真实后果
+
+**1. 失败提示是死代码。** 视图里：
+
+```js
+.catch(() => setOlderNote(t("action.loadOlderFailed")))
+```
+
+`loadOlder` 从不 reject，这个 catch 永远不触发。用户在断网/会话过期时点「载入更早历史」，按钮转一圈转回来，什么都没说。
+
+而这个 catch 分支正是 §12.77 `LOADOLDER1` 那轮我加的东西——我当时的守卫只断言"`.catch` 里调用了 setOlderNote"，没断言"这个 catch 能被进入"。**又一次伪绿，而且是我自己写的。**
+
+**2. 锚点翻页失败会重试 40 次。** 循环判据：
+
+```js
+if (stationsRef.current.length === before && moved !== true) break;  // no progress
+```
+
+失败页返回 `moved = true`，所以这条 break 永远不成立，最多重复 40 次注定失败的请求。
+
+#### 修法
+
+读宿主的状态，不猜：
+
+```js
+const after = session.getSnapshot();
+const failed = after.historyLoadStatus === "error" && before.historyLoadStatus !== "error";
+if (failed) throw new Error("loadOlder failed");
+return after !== before;
+```
+
+状态从非 error 变成 error = 这一页失败了。用 `before !== "error"` 而不是裸比较，是为了不把上一页遗留的 error 状态重复计入。
+
+#### 教训
+
+前十二轮我一直在插件内部找问题，这一轮去读宿主源码就发现了一条。**"插件的假设"和"宿主的实现"之间是没有类型检查的边界**，而这条边界上已经藏了一个死分支。
+
+值得记的是：我上一轮加那个 catch 时，守卫是"源码里有没有这个调用"——和 `COPY1`、`P4`、`SESSION1` 是同一类伪绿。真正该问的是"这个分支在真实宿主下能不能被进入"，而回答它需要读宿主。
+
+#### 未验证
+
+- 宿主源码读的是 `src/`（TypeScript 源），运行时跑的是 `lib/`。我确认过行为一致（`lib` 是编译产物，逻辑未变），但没有在真实运行环境里注入一次翻页失败来验证。
+- 仍未跑真实浏览器。
