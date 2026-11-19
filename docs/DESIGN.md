@@ -3895,3 +3895,46 @@ effect 的 cleanup 只是把 `cancelled = true`，**并不能停止已经在跑�
 #### 仍未解决
 
 `stepNo` 和 `totalSteps` 本身仍是窗口级的（它们是"第几个步骤/共几个步骤"的语义，天然依赖窗口）。增量折叠要成立的话，这两个得改成累加维护——但那是另一件事。
+
+### 12.72 这一轮又找到的问题（2026-11-19）
+
+#### 已修
+
+**1. 导出的裸文本会把整篇文档搞坏**
+
+`buildStepMarkdown` 的 `cell.text` 早就做了反引号转义，但**另外 4 处入口没有**：
+
+| 入口 | 位置 |
+|---|---|
+| `buildTraceMarkdown` 的 user 站点 `text` | 1873 |
+| `buildTraceMarkdown` 的 assistant `cell.text` | 1883 |
+| `buildTraceMarkdown` 的 reasoning | 1882 |
+| `buildTraceMarkdown` 的 compaction `summary` | 1618 |
+
+后果实测：
+- 模型输出一段没写完的代码围栏（流式被打断就会有）→ **后面整篇被当成代码块吞掉**，我测出 `未闭合围栏=3`。
+- reasoning 里出现 `</details>` → **提前关闭思考折叠块**，后续步骤渲染到它自己的标题外面。
+
+统一收进 `proseSafe()`，只转义真正危险的两个构造（3+ 反引号、`<details>`/`</details>`），其他 markdown 语法原样保留。`MD2` 守卫用**行状态机**校验（不是数反引号行数的奇偶——4/5 个反引号是合法围栏，那种数法会误报）。
+
+**2. 末尾的 steering 凭空多出一个 turn**
+
+官方布局对 `steering` 用的是 `lastAssistantTurn`（它插话进正在跑的那一轮），只有 `user` 才开新轮。我们统一按"新输入"处理，于是窗口末尾的一条插话单独成了一个 turn。
+
+修法：EOF 处把 `pendingUser` 按 `steering` 拆开，插话归最后一轮，真正的 user 才开新轮。`STEER1` 覆盖三种情形（末尾插话、插话后有 user、插话夹在同轮 assistant 前）。
+
+#### 查过、确认没问题的
+
+用 43 个畸形快照（每种 kind × 缺字段 × 非数组 × null）模糊 `deriveTraceTree`：**0 抛异常**。
+
+锚点解析 19 个边界输入（空串、负数、`0x10`、`NaN`、超大数、中文、大小写）全部返回预定义结果，**0 抛异常**。
+
+`safeJsonPreview` 对循环引用、BigInt、Symbol、函数、稀疏数组、Map 都能正常降级。
+
+2 MB 单行文本折叠 3 ms、导出 7 ms，没有卡死。
+
+#### 查过、判断为设计取舍（不是缺陷）
+
+- **`prompt.indexOf` 之类的顺序状态**：`lastPrompt` 继承依赖窗口，裁剪请求后 turn 2 继承不到 turn 1 的 prompt。但宿主分页时 `requests` 和 `eventNodes` 是一起裁的，**实际影响是"窗口外的东西看不到"，符合预期**。
+- **重试的 token 只算最后一次**：同一 step 两次 `requests` 只有一条进 stats。这是"一次步骤一行"的设计，重试的中间消耗在请求详情里仍然可见。
+- **用户输入里的 `<img onerror>` 原样保留在导出里**：导出是 Markdown 文件，不是 HTML 页面；如果强行转义所有 HTML，正常引用 HTML 的对话就没法看了。这与"导出要忠实"冲突，保留原样。
