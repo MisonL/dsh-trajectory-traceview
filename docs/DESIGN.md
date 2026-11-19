@@ -4463,3 +4463,58 @@ listbox 只允许 `option`（或 `group`）子元素。空闲带是纯装饰—�
 - 仍然**没有真实浏览器**。`ARIA4` 用的是 `react-dom/server` + 真 jsx runtime，验证的是输出 HTML 里的 `aria-hidden`，不是读屏软件的实际播报。
 - `TIMER1` 的行为断言是复刻调度逻辑，不是真的操作组件。
 - `client.js` 拆分、真机响应式、npm 发布仍未动（用户明确暂不发布）。
+
+### 12.80 第十一、十二轮：页签粘连、minimap 的 200 个 Tab 停靠点、请求页行串位（2026-11-19）
+
+#### 请求页签会"记住"一个不存在的页（`TABLATCH1`）
+
+`showTab` 有一层回落：
+
+```js
+const showTab = tab === "request" && canRequest ? "request" : "detail";
+```
+
+所以在一个没有 request 的站点上点「请求」按钮，画面不动——看起来按钮无效，符合预期。但 `tab` state **已经写成 `"request"`** 了。用户接着用 `→` 或点 minimap 走到一个有 request 的站点，面板自己跳到请求页，没有任何人按过任何东西。
+
+`r` 快捷键一直有 `canRequest` 保护；这个按钮没有。
+
+#### minimap 是 200 个 Tab 停靠点（`MINITAB1`）
+
+minimap 是**同一批站点的第二个导航入口**，时间轴本身已经用了 roving tabindex。但每个刻度都是普通 `<button>`。实测渲染 200 个站点：
+
+```
+可 Tab 聚焦元素: 215
+其中 minimap 刻度: 200
+```
+
+长会话按 3,600 站点算是约 3,600 个停靠点——键盘用户要一路 Tab 穿过整条 strip 才能到达下面的面板，而这条 strip 唯一的作用是"跳到某个站点"。
+
+改成与时间轴一致的 roving tabindex 后：**215 → 16**。
+
+修的时候我第一次写成 `i === R - 1 ? 0 : -1`，overview 态（`revealed === null`）下**一个都不可 Tab**——整条 strip 从键盘上彻底消失。这是相反的失败，同样错。最终规则与站点列表一致：当前选中的那个，否则第一个。守卫因此断言的是"恰好 1 个"，不是"少于 N 个"。
+
+#### 请求页的行会串（`MSGKEY1`）
+
+消息列表在站点窗口向前增长时重建，而历史是**前插**的，所以 `index 0` 不再是原来那条消息。行却按下标做 key：
+
+```
+只有 6-10 时：U6 在 index 0
+前插 1-5 后： U6 到了 index 5
+              旧 key  m0 → m5        同一个 DOM 节点换了内容
+```
+
+React 复用 DOM 节点 → 用户展开的那一行显示的是另一条消息的正文；而 `open: i === messages.length - 1` 也按下标算，所以新变成最后一行的自己展开了。
+
+`reconstructMessages` 现在给每条消息带上 `seq`（持久记录号），键改成 `m<seq>-<role>`。
+
+**这是同一类缺陷的第三次**：合成站点 id 含窗口计数（§12.78 SYNTHID1）、选择修复按下标（更早）、请求页按下标做 key。前插历史 = 所有"按下标"的东西都会失准。区别只是前两次是选择丢失，这次是 DOM 状态错位。
+
+#### 顺手修的
+
+`usedStationIds` 声明掉了缩进（顶格写），语义没问题但下一行 `let pendingUser = []` 会让人误读作用域。
+
+#### 未验证（沿用前几轮）
+
+- 仍无真实浏览器。`MINITAB1` 数的是 `react-dom/server` 输出里的 `tabindex` 属性，不是真的按 Tab 键走一遍。
+- `MSGKEY1` 验证的是 key 字符串的稳定性，不是真实的 DOM 复用行为（那需要真实 React 协调过程）。
+- `client.js` 拆分、真机响应式、npm 发布仍未动。
