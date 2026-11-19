@@ -982,6 +982,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── CALLID1: a duplicated callId must not swap or drop results ────────────
+	// A merged/replayed log can repeat a callId in two turns. Two separate bugs:
+	// `resultsById` was a plain Map so only the LAST result survived (turn 1 showed
+	// turn 2's output), and `attachedCallIds` deduped on the bare id so the second call
+	// was dropped outright and its result appeared as an unrelated "orphan".
+	{
+		const cf = (seq, turn, text) => ([
+			{ kind: "user", seq: seq - 1, time: seq, content: [{ type: "text", text: "q" + turn }] },
+			{ kind: "assistant", seq, time: seq, turn, step: 1, messageId: "m" + turn, blocks: [{ kind: "tool-call", callId: "SAME", name: "bash", argsRaw: "{}" }] },
+			{ kind: "tool-result", seq: seq + 1, time: seq + 1, callId: "SAME", call: { name: "bash", argsRaw: "{}" }, content: [{ type: "text", text }], isError: false, subCalls: [] }
+		]);
+		const trC = deriveTraceTree({
+			eventNodes: [...cf(2, 1, "结果1"), ...cf(5, 2, "结果2")],
+			requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+		}, t);
+		const steps = trC.stations.filter((x) => x.kind === "step");
+		if (steps.length !== 2) throw new Error("CALLID1 expected two steps, got " + steps.length);
+		const byTurn = new Map(steps.map((x) => [x.turn, x]));
+		const r1 = byTurn.get(1).cells.filter((c) => c.kind === "tool").map((c) => c.resultText).join("|");
+		const r2 = byTurn.get(2).cells.filter((c) => c.kind === "tool").map((c) => c.resultText).join("|");
+		if (r1 !== "结果1") throw new Error("CALLID1 turn 1 shows the wrong result: " + JSON.stringify(r1));
+		if (r2 !== "结果2") throw new Error("CALLID1 turn 2 lost its call/result: " + JSON.stringify(r2));
+		if (trC.stations.some((x) => x.kind === "orphan-tool")) {
+			throw new Error("CALLID1 a duplicated callId produced a false orphan");
+		}
+	}
+
 	// ── ANCHOR4: never offer an anchor that comes back to a DIFFERENT record ──
 	// `e<seq>` names a seq, and one seq can carry several stations: a turn-error is
 	// stamped with the turn's end seq, which equals the assistant message's seq, and a
