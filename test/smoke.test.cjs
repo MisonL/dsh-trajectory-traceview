@@ -1896,6 +1896,10 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (srcCp.indexOf("setCopyState(ok ? \"ok\" : \"fail\")") < 0) {
 			throw new Error("COPY1 a failed copy is still silent");
 		}
+		// A visible word needs a visible colour, or "✗ Copy failed" reads as a label.
+		if (srcCp.indexOf(".dstv_copyBtn[data-fail=true]") < 0) {
+			throw new Error("COPY1 the failure state is not styled, so it does not read as a failure");
+		}
 	}
 
 	// ── SESSION1: switching conversations must not carry UI state across ──────

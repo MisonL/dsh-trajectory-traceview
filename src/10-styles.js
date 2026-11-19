@@ -209,6 +209,9 @@
 			".dstv_copyBtn{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);cursor:pointer;display:inline-flex;align-items:center;gap:4px}",
 			".dstv_copyBtn:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-secondary)}",
 			".dstv_copyBtn[data-ok=true]{border-color:var(--dstv-ok);color:var(--dstv-ok)}",
+			// Failure is a real outcome (non-secure context, refused permission) and the
+			// button now says so; without a colour the "✗" reads as another label.
+			".dstv_copyBtn[data-fail=true]{border-color:var(--dstv-err);color:var(--dstv-err)}",
 			"details.dstv_det{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}",
 			"details.dstv_det>summary{cursor:pointer;padding:5px 9px;font-size:11.5px;font-weight:600;list-style:none;display:flex;align-items:center;gap:6px}",
 			"details.dstv_det>summary::-webkit-details-marker{display:none}",
