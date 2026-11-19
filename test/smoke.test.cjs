@@ -1007,6 +1007,15 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (String(sAfter.label).includes(" " + String(sAfter.stepNo) + "") && sAfter.stepNo !== sAfter.turnStep) {
 			throw new Error("PREFIX1 the label still uses the window-wide stepNo");
 		}
+		// The accessible name carries the same number and must be stable too: a screen
+		// reader user should not hear the record renumbered while paging back.
+		const iBefore = before.stations.indexOf(sBefore);
+		const iAfter = after.stations.indexOf(sAfter);
+		const aBefore = stationAriaLabel(sBefore, iBefore, before.stations.length, t);
+		const aAfter = stationAriaLabel(sAfter, iAfter, after.stations.length, t);
+		if (!aBefore.includes("node.step 1") || !aAfter.includes("node.step 1")) {
+			throw new Error("PREFIX1 the accessible name renumbers steps: " + aBefore + " -> " + aAfter);
+		}
 	}
 
 	// ── ANCHOR3: every anchor we hand out must resolve back to its own station ──

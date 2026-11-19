@@ -1418,7 +1418,10 @@ const usedStationIds = new Set();
 		 * position and colour.
 		 */
 		function stationAriaLabel(station, position, total, t) {
-			const kind = station.kind === "step" ? `${t("node.step")} ${String(station.stepNo)}`
+			// Per-turn number: `stepNo` is a window-wide counter, so this label used to
+			// read "步骤 1" and then "步骤 5" for the same station once older history was
+			// loaded — a screen reader user would hear the record renumbered under them.
+			const kind = station.kind === "step" ? `${t("node.step")} ${String(station.turnStep ?? station.stepNo)}`
 				: station.kind === "user" ? t("node.user")
 					: station.kind === "error" ? t("node.error")
 						: station.kind === "compaction" ? t("node.compaction")
