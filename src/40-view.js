@@ -719,6 +719,9 @@
 			 * them to move selection, which is what a listbox user expects.
 			 */
 			const stationOnKeyDown = (ev, i) => {
+				// Same rule as the panel-level handler: a station button must not swallow a
+				// browser shortcut. It calls stopPropagation, so the guard above cannot help.
+				if (ev.ctrlKey === true || ev.metaKey === true || ev.altKey === true) return;
 				const k = ev.key;
 				if (k === "ArrowRight" || k === "ArrowDown") {
 					const next = Math.min(N - 1, i + 1);
@@ -736,6 +739,13 @@
 			};
 			const onKeyDown = (ev) => {
 				const k = ev.key;
+				// Browser and OS shortcuts must win. The panel root is focusable
+				// (`tabIndex: 0`), so once the user clicks anywhere inside it these keys
+				// arrive here first: Ctrl/Cmd+R stopped reloading the page and toggled the
+				// request tab, Ctrl/Cmd+F stopped browser find and focused our search box,
+				// Alt+Left stopped going back and stepped the timeline, Ctrl+Home stopped
+				// scrolling to the top. Bail out on any modifier combination.
+				if (ev.ctrlKey === true || ev.metaKey === true || ev.altKey === true) return;
 				const tag = ev.target && ev.target.tagName ? String(ev.target.tagName).toLowerCase() : "";
 				if (tag === "input" || tag === "textarea" || tag === "select" || (ev.target && ev.target.isContentEditable === true)) return;
 				if (k === "/" || k === "f") {

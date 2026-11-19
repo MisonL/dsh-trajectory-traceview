@@ -1045,6 +1045,29 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (checked < 3) throw new Error("ANCHOR3 expected several stations to check, got " + checked);
 	}
 
+	// ── KEY1: the panel must not swallow browser/OS shortcuts ─────────────────
+	// The panel root is focusable (`tabIndex: 0`) and station rows are buttons, so once
+	// the user clicks inside the view every key lands here first. Without a modifier
+	// check, Ctrl/Cmd+R toggled the request tab instead of reloading, Ctrl/Cmd+F
+	// focused our search box instead of browser find, and Alt+Left stepped the
+	// timeline instead of going back.
+	{
+		const src = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const start = src.indexOf("const onKeyDown = (ev) => {");
+		const startStation = src.indexOf("const stationOnKeyDown = (ev, i) => {");
+		if (start < 0 || startStation < 0) throw new Error("KEY1 key handlers not found");
+		for (const [name, at] of [["panel", start], ["station", startStation]]) {
+			// Look only at the head of each handler, where the early-return guard lives.
+			const head = src.slice(at, at + 900);
+			for (const mod of ["ctrlKey", "metaKey", "altKey"]) {
+				if (!head.includes("ev." + mod + " === true")) {
+					throw new Error("KEY1 the " + name + " key handler does not bail out on " + mod + " — browser shortcuts are hijacked");
+				}
+			}
+			if (!/return;/.test(head)) throw new Error("KEY1 the " + name + " handler has no early return");
+		}
+	}
+
 	// ── MD2: raw prose must not restructure the exported document ─────────────
 	// Prose is emitted unwrapped so emphasis and lists survive, which means anything
 	// structural inside it lands in the document verbatim. Two things bit us: a run of
