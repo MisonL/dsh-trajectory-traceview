@@ -1858,6 +1858,48 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── COPYFOCUS1: the legacy copy path must not eat focus ───────────────────
+	// `navigator.clipboard` does not exist on plain http://, so the textarea +
+	// `execCommand` path is the COMMON one, not a museum piece. It did `ta.select()`
+	// and then removed the textarea: the focused element disappeared, focus fell back
+	// to <body>, and every copy threw keyboard/screen-reader users to the top of the
+	// document. An editable focused textarea also raises the iOS keyboard.
+	{
+		const srcCF = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const at0 = srcCF.indexOf("// Legacy fallback");
+		if (at0 < 0) throw new Error("COPYFOCUS1 the legacy copy path is missing");
+		const seg = srcCF.slice(at0, srcCF.indexOf("function safeHref", at0));
+		// Execute it against a fake DOM so the assertions are behavioural, not textual.
+		const fakeTa = { value: "", style: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, select() { this.selected = true; } };
+		let removed = false, appended = null, refocused = null;
+		const boxCF = {
+			console,
+			navigator: void 0,
+			document: {
+				activeElement: { focus(opts) { refocused = opts; } },
+				createElement() { return fakeTa; },
+				body: { appendChild(el) { appended = el; }, removeChild() { removed = true; } },
+				execCommand() { return true; }
+			}
+		};
+		const vmCF = require("node:vm").createContext(boxCF);
+		require("node:vm").runInContext(srcCF.slice(srcCF.indexOf("function copyText("), srcCF.indexOf("function safeHref")), boxCF, { timeout: 20000 });
+		if (typeof boxCF.copyText !== "function") throw new Error("COPYFOCUS1 copyText never became callable");
+		let ok = null;
+		boxCF.copyText("hello", (v) => { ok = v; });
+		if (appended === null) throw new Error("COPYFOCUS1 the legacy path never appended a textarea");
+		if (removed !== true) throw new Error("COPYFOCUS1 the temporary textarea was left in the DOM");
+		if (fakeTa.attrs.readonly !== "") {
+			throw new Error("COPYFOCUS1 the focused textarea is editable, so iOS raises a keyboard into an invisible field");
+		}
+		if (fakeTa.attrs["aria-hidden"] !== "true") throw new Error("COPYFOCUS1 the helper field is exposed to assistive tech");
+		if (refocused === null) {
+			throw new Error("COPYFOCUS1 focus was never restored — removing the focused textarea drops it to <body>");
+		}
+		if (refocused.preventScroll !== true) throw new Error("COPYFOCUS1 restoring focus must not scroll the timeline");
+		if (ok !== true) throw new Error("COPYFOCUS1 the legacy path reported " + String(ok));
+	}
+
 	// ── LOADOLDER1: a refused history page must say so ────────────────────────
 	// The button flipped to "loading", flipped back, and the timeline simply did not
 	// grow. Offline / expired session / host error all looked identical to "nothing

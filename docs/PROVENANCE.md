@@ -38,13 +38,12 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**10 个原样保留、14 个被修改、0 个被删除**；本仓**新增 36 个**。
+上游 24 个函数：**9 个原样保留、15 个被修改、0 个被删除**；本仓**新增 36 个**。
 
-### 原样保留（10）
+### 原样保留（9）
 
 未做任何改动，可与上游逐字对照：
 
-- `copyText`
 - `decodeRateOf`
 - `firstLine`
 - `fmtInt`
@@ -55,7 +54,7 @@
 - `subName`
 - `toolGlyph`
 
-### 已修改（14）
+### 已修改（15）
 
 **这些是二开最容易与前人意图冲突的地方**——功能骨架来自上游，但行为已被改变。每处都应在 `docs/DESIGN.md` 里找得到"为什么改"的记录：
 
@@ -64,6 +63,7 @@
 - `apply`
 - `blocksText`
 - `buildTraceMarkdown`
+- `copyText`
 - `deriveTraceTree`
 - `fmtDur`
 - `fmtTokens`
