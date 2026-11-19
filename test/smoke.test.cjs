@@ -1881,6 +1881,51 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── ANCHORTYPE1: typing an anchor must not validate on every keystroke ────
+	// `anchorInput` was part of the token that drives the resolve effect, so each
+	// keystroke ran a full `anchorApply`: typing `tvp1:t2s1` produced eight failed
+	// parses and flashed "unrecognised anchor format" eight times, then succeeded on the
+	// ninth. Worse, a half-typed anchor that happens to PARSE (e.g. `tvp1:e2` on the way
+	// to `tvp1:e20`) navigated away mid-typing. The typed value belongs to the Enter
+	// handler, which is the moment the user asks for it.
+	{
+		const srcAt = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const tokAt = srcAt.indexOf("const anchorToken = (0, react.useMemo)(");
+		if (tokAt < 0) throw new Error("ANCHORTYPE1 the anchor token is missing");
+		const tokLine = srcAt.slice(tokAt, srcAt.indexOf("\n", tokAt));
+		if (tokLine.indexOf("anchorInput") >= 0) {
+			throw new Error("ANCHORTYPE1 the typed value drives the resolve effect, so every keystroke is applied");
+		}
+		// The effect must not read the typed value either — dropping it from the token
+		// but still reading it in the body would re-apply the last value on any re-run.
+		const effAt = srcAt.indexOf("const appliedAnchorRef = (0, react.useRef)(null);");
+		const effEnd = srcAt.indexOf("}, [anchorToken, N]);", effAt);
+		if (effAt < 0 || effEnd < 0) throw new Error("ANCHORTYPE1 could not locate the resolve effect");
+		const effBody = srcAt.slice(effAt, effEnd);
+		if (effBody.indexOf("anchorInput") >= 0) {
+			throw new Error("ANCHORTYPE1 the resolve effect still reads the typed value");
+		}
+		// ...but the ANCHOR ENTER HANDLER must still use it, otherwise typing does nothing
+		// at all. Anchor on the call itself, not on the first `Enter` in the file: the
+		// search box has its own Enter handler, and scanning from that one ran 18k
+		// characters through unrelated code that mentions `anchorInput` — so deleting the
+		// typed jump entirely still passed. Measured, then rewritten.
+		// Anchor on the ASSIGNMENT and look forward: the effect holds the other
+		// `anchorApplyGuarded(wanted)` call, so scanning backwards from the first match
+		// landed on the effect and reported the typed jump missing.
+		const typedAt = srcAt.indexOf("const wanted = anchorInput.trim();");
+		if (typedAt < 0) throw new Error("ANCHORTYPE1 the anchor Enter handler no longer reads the typed value");
+		const afterTyped = srcAt.slice(typedAt, typedAt + 400);
+		if (afterTyped.indexOf("anchorApplyGuarded(wanted)") < 0) {
+			throw new Error("ANCHORTYPE1 the typed value is read but never applied");
+		}
+		// Deleting the body of the jump (`const wanted = "";`) must fail: the assignment
+		// itself has to read the input.
+		if (afterTyped.indexOf('const wanted = "";') >= 0) {
+			throw new Error("ANCHORTYPE1 the typed jump was emptied");
+		}
+	}
+
 	// ── ANCHORLIFE1: an anchor search must not outlive the panel ──────────────
 	// Paging for an anchor can run for tens of seconds (up to 40 pages). The loop's
 	// progress test reads `stationsRef`, which FREEZES at its last value once the

@@ -521,7 +521,11 @@
 			const anchorToApply = focusAnchor ?? (hashAnchorNow !== null && hashAnchorNow !== "" ? hashAnchorNow : null);
 			// Stable identity for "which anchor am I currently trying to land on", so the
 			// resolve effect can track the attempt itself instead of the raw props.
-			const anchorToken = (0, react.useMemo)(() => [anchorToApply, anchorInput, hash].map((v) => (typeof v === "string" ? v : "")).join("\u0000"), [anchorToApply, anchorInput, hash]);
+			// `anchorInput` must NOT be part of this token. It is the typed value, and the
+			// typed value is applied by the Enter handler — putting it here made the effect
+			// re-run on EVERY keystroke, so typing `tvp1:t2s1` fired eight failed parses and
+			// flashed "unrecognised anchor format" eight times before the ninth succeeded.
+			const anchorToken = (0, react.useMemo)(() => [anchorToApply, hash].map((v) => (typeof v === "string" ? v : "")).join("\u0000"), [anchorToApply, hash]);
 			// An anchor search can page for tens of seconds. If the panel unmounts (the
 			// host re-mounts the view on a conversation switch) or the session changes,
 			// the loop kept going: `stationsRef` freezes at its last value, so the
@@ -649,7 +653,9 @@
 			const appliedAnchorRef = (0, react.useRef)(null);
 			(0, react.useEffect)(() => {
 				if (N === 0) return;
-				const wanted = (anchorToApply !== null && anchorToApply !== "") ? anchorToApply : anchorInput.trim();
+				// Only the URL / view-request path runs here; a typed anchor is applied by
+				// the Enter handler, which is the moment the user actually asked for it.
+				const wanted = anchorToApply !== null && anchorToApply !== "" ? anchorToApply : "";
 				if (wanted === "") return;
 				// `N` must stay in the dependency list: a deep link can arrive before the
 				// projection has any stations, and the retry on growth is what makes it
