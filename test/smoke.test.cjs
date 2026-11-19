@@ -982,6 +982,28 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── ANCHOR5: the deep-link loop must not re-scan an unchanged list ────────
+	// The reveal loop called the O(n) anchor scan on every 20/40/…/250 ms retry even
+	// when the projection had not replaced `stationsRef.current`. With a 3,600-station
+	// window that is 12 redundant scans per page, 40 pages deep.
+	{
+		const src = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const at = src.indexOf("if (stationsRef.current === beforeArr) continue;");
+		if (at < 0) throw new Error("ANCHOR5 the reveal loop no longer skips an unchanged station list");
+		// The guard must sit BEFORE the scan inside the retry loop, and the scan must be
+		// inside the same loop — otherwise it either never runs or always runs.
+		const tail = src.slice(at, at + 400);
+		if (tail.indexOf("resolveAnchorInStations(parsed, stationsRef.current)") < 0) {
+			throw new Error("ANCHOR5 the skip is not guarding the anchor scan");
+		}
+		if (tail.indexOf("continue;") > tail.indexOf("resolveAnchorInStations(parsed, stationsRef.current)")) {
+			throw new Error("ANCHOR5 the skip comes after the scan, so it saves nothing");
+		}
+		if (!/const beforeArr = stationsRef\.current;/.test(src)) {
+			throw new Error("ANCHOR5 the loop must capture the array identity before paging");
+		}
+	}
+
 	// ── SCALE1: the fold must survive a session large enough to overflow a spread ──
 	// The fold called `Math.max(...turns.map(...))`. Spreading one argument per turn
 	// throws "Maximum call stack size exceeded" once a session is big enough (measured

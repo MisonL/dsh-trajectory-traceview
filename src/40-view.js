@@ -459,6 +459,7 @@
 							if (anchorCoveredByWindow(parsed, stationsRef.current)) break;
 						}
 						const before = stationsRef.current.length;
+						const beforeArr = stationsRef.current;
 						let moved = false;
 						try { moved = await loadOlder(); } catch { moved = false; }
 						pages += 1;
@@ -474,11 +475,22 @@
 						// re-derives within a frame, so the first check is cheap and later
 						// ones stretch out. Deep links page up to 40 times, and the fixed
 						// delay alone added ~10 s to that path.
+						//
+						// Do NOT re-scan the same list. Re-running the O(n) anchor scan over
+						// an unchanged array returned "not-loaded" every time it already had,
+						// for nothing — up to 12 times a page, 40 pages deep, with 3,600
+						// stations in the window. Scan only once the projection replaced the
+						// array (identity, not length: see below).
 						for (let i = 0; i < ANCHOR_REVEAL_TRIES; i += 1) {
 							await new Promise((r) => setTimeout(r, Math.min(ANCHOR_REVEAL_MS, 20 * 2 ** i)));
+							// Identity, not just length: the derived tree builds a NEW array
+							// every projection, so an unchanged reference is the only cheap
+							// proof that re-scanning would return exactly what it returned
+							// before. A same-length replacement (which paging never does, but
+							// a re-projection could) still gets scanned.
+							if (stationsRef.current === beforeArr) continue;
 							resolved = resolveAnchorInStations(parsed, stationsRef.current);
-							if (resolved.ok === true) break;
-							if (stationsRef.current.length !== before) break;
+							break;
 						}
 						if (resolved.ok === true) break;
 						if (stationsRef.current.length === before && moved !== true) break; // no progress
