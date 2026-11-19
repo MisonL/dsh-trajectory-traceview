@@ -982,6 +982,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── ANCHOR3: every anchor we hand out must resolve back to its own station ──
+	// `anchorOf` wrote the WINDOW-wide `stepNo`, but `p<turn>s<step>` is RESOLVED
+	// against the per-turn `turnStep`. On a synthetic step (the live/streaming one has
+	// no anchorSeq at all) the two disagree: turn 2's live step handed out
+	// `tvp1:p2s3`, and pasting it back reported "not loaded". Round-tripping every
+	// station is the only way to keep the writer and the reader in agreement.
+	{
+		const snapA = { eventNodes: [
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "q1" }] },
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "a" }] },
+			{ kind: "user", seq: 3, time: 3, content: [{ type: "text", text: "q2" }] },
+			{ kind: "assistant", seq: 4, time: 4, turn: 2, step: 1, messageId: "m2", blocks: [{ kind: "text", text: "b" }] }
+		], requests: [], callSchemas: new Map(), runningCalls: [], partial: { turn: 2, step: 2, blocks: [{ kind: "text", text: "streaming" }] } };
+		const trA = deriveTraceTree(snapA, t);
+		let checked = 0;
+		for (const st of trA.stations) {
+			const a = anchorOf(st);
+			if (a === null) continue;
+			const back = resolveAnchorInStations(parseAnchor(a), trA.stations);
+			if (back.ok !== true || back.station.id !== st.id) {
+				throw new Error("ANCHOR3 " + st.id + " hands out " + a + " which resolves to " + (back.ok ? back.station.id : back.reason));
+			}
+			checked += 1;
+		}
+		if (checked < 3) throw new Error("ANCHOR3 expected several stations to check, got " + checked);
+	}
+
 	// ── ANCHOR2: one anchor search at a time, but never a stuck one ──────────
 	// The search is started from the URL/focus effect AND from typed Enter, and its
 	// driving effect re-fires as `N` grows. Concurrent searches each kept their own page
