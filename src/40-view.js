@@ -1664,9 +1664,15 @@
 						? { role: "user", content: [{ type: "text", text: m.text }] }
 						: { role: m.role, content: m.content, ...(m.toolCallId != null ? { toolCallId: m.toolCallId } : {}), ...(m.isError != null ? { isError: m.isError } : {}) })
 				};
-				const payloadJson = JSON.stringify(payload, null, 2);
-
-				const sysJson = JSON.stringify({ system: req.prompt?.system ?? "", tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) }, null, 2);
+				// `JSON.stringify` throws on a circular structure and on a BigInt, and what
+				// arrives here is the host's own prompt/tool descriptor, not something we built.
+				// A tool schema carrying a shared object reference (perfectly legal in a live
+				// descriptor) therefore blanked the whole request tab instead of showing one
+				// field as unrepresentable. `safeJsonPreview` already solves this everywhere
+				// else; the request tab was the only place that called JSON directly.
+				const payloadJson = safeJsonPreview(payload, Number.MAX_SAFE_INTEGER, 2);
+				const sysToolsJson = safeJsonPreview(tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })), Number.MAX_SAFE_INTEGER, 2);
+				const sysJson = safeJsonPreview({ system: req.prompt?.system ?? "", tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) }, Number.MAX_SAFE_INTEGER, 2);
 
 				return jsxs("div", { className: "dstv_dBody", children: [
 					// config + lifecycle chips
@@ -1734,7 +1740,10 @@
 							jsx("span", { children: `🛠 ${t("detail.toolsCatalog")}` }, "tcHead"),
 							jsx("span", { className: "sub", children: `${tools.length} ${t("detail.toolCount")}` }, "tcLen"),
 							jsx("span", { className: "grow" }, "tcGrow"),
-							jsx(CopyBtn, { text: JSON.stringify(tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })), null, 2), label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "tcCopy")
+							// Must match `sysJson` above, which already uses the safe serializer:
+							// the copy button would otherwise throw on the same descriptor that
+							// renders fine, and the throw happens during render, not on click.
+							jsx(CopyBtn, { text: sysToolsJson, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "tcCopy")
 						] }, "tcSecHead"),
 						jsxs("details", { className: "dstv_det", open: false, children: [
 							jsx("summary", { children: [`${t("detail.toolsCatalog")} (${tools.length})`] }, "tcSum"),
@@ -1777,7 +1786,7 @@
 							const preview = m.text !== "" ? m.text : (m.role === "tool" ? `${m.toolCallId ?? ""}${m.isError ? " ✗" : ""}` : "…");
 							return jsxs("details", { className: "dstv_det", open: i === messages.length - 1, children: [
 								jsx("summary", { children: [jsx("span", { className: `dstv_msgRole ${m.role}`, children: m.role === "note" ? t("node.compaction") : m.role }, "mr"), jsx("span", { className: "dstv_msgPrev", children: firstLine(preview) }, "mp"), jsx("span", { className: "sub", children: String(m.text.length) }, "ml")] }, `ms${i}`),
-								jsx("div", { className: "inner", children: jsx("div", { className: "dstv_code", style: { maxHeight: 200 }, children: m.text !== "" ? m.text : JSON.stringify(m.content, null, 2) }, "mc") }, `mi${i}`)
+								jsx("div", { className: "inner", children: jsx("div", { className: "dstv_code", style: { maxHeight: 200 }, children: m.text !== "" ? m.text : safeJsonPreview(m.content, Number.MAX_SAFE_INTEGER, 2) }, "mc") }, `mi${i}`)
 							] }, `m${i}`);
 						}) }, "mList")
 					] }, "mSec") : null

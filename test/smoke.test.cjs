@@ -1858,6 +1858,58 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── REQJSON1: the request tab must survive a descriptor it did not build ──
+	// The payload and the tool catalog come from the HOST. `JSON.stringify` throws on a
+	// circular structure and on a BigInt, and the throw happens during RENDER — one
+	// shared object reference in a tool schema blanked the whole request tab. The server
+	// render test never saw it because that tab is not the default.
+	{
+		const srcRj = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const bodyAt = srcRj.indexOf("const renderRequestBody = (s, messages) => {");
+		if (bodyAt < 0) throw new Error("REQJSON1 renderRequestBody is missing");
+		const nextFn = srcRj.indexOf("\n\t\t\tconst ", bodyAt + 20);
+		const body = srcRj.slice(bodyAt, nextFn < 0 ? bodyAt + 24000 : nextFn);
+		// Strip comments before scanning: the comment explaining the hazard names it.
+		const code = body.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+		if (/JSON\.stringify\(/.test(code)) {
+			throw new Error("REQJSON1 the request tab still calls JSON.stringify directly, so a circular or BigInt descriptor throws during render");
+		}
+		// Behavioural: the helper must actually survive both shapes.
+		const circ = { type: "object" }; circ.self = circ;
+		const cycOut = safeJsonPreview(circ, Number.MAX_SAFE_INTEGER, 2);
+		if (typeof cycOut !== "string" || cycOut.indexOf("[Circular]") < 0) {
+			throw new Error("REQJSON1 a circular descriptor is not printable: " + String(cycOut).slice(0, 60));
+		}
+		const bigOut = safeJsonPreview({ d: 10n }, Number.MAX_SAFE_INTEGER);
+		if (bigOut.indexOf("10n") < 0) throw new Error("REQJSON1 a BigInt descriptor is not printable: " + bigOut);
+		// A plain alias is NOT a cycle: marking it "[Circular]" would silently hide real
+		// content, which is its own defect.
+		const alias = { n: 1 };
+		const aliasOut = safeJsonPreview([alias, alias], Number.MAX_SAFE_INTEGER, 2);
+		if (aliasOut.indexOf("[Circular]") >= 0) {
+			throw new Error("REQJSON1 a shared (non-circular) reference is mislabelled as circular: " + aliasOut.replace(/\s+/g, " "));
+		}
+		// Indent must stay opt-in: every other caller expects one compact line. Both
+		// directions are asserted here because a default indent silently reflows every
+		// payload cell into a multi-line block, and a lost indent makes the request tab
+		// one unreadable line.
+		const compact = safeJsonPreview({ a: 1, b: 2 }, 1000, 0);
+		if (compact.indexOf("\n") >= 0) {
+			throw new Error("REQJSON1 the compact preview gained newlines: " + JSON.stringify(compact));
+		}
+		const pretty = safeJsonPreview({ a: 1, b: 2 }, Number.MAX_SAFE_INTEGER, 2);
+		if (pretty.indexOf("\n") < 0) {
+			throw new Error("REQJSON1 the pretty-printed request payload is no longer indented: " + JSON.stringify(pretty));
+		}
+		// A negative / fractional indent must degrade to compact, not to "2".
+		for (const badPad of [-2, 1.5, NaN, "2", null]) {
+			const out = safeJsonPreview({ a: 1 }, 1000, badPad);
+			if (out.indexOf("\n") >= 0) {
+				throw new Error("REQJSON1 indent " + String(badPad) + " was treated as a real indent: " + JSON.stringify(out));
+			}
+		}
+	}
+
 	// ── ANCHOR6: an impossible anchor must be rejected, not chased ───────────
 	// Turns and steps are 1-based everywhere in the projection, so `t0` / `s0` name no
 	// record. Accepting them was not harmless: resolution answered "not-loaded", which

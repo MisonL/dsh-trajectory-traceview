@@ -305,23 +305,36 @@
 		 * @param limit - maximum characters to keep.
 		 * @returns a printable string, never throwing.
 		 */
-		function safeJsonPreview(value, limit) {
+		function safeJsonPreview(value, limit, indent) {
 			let text = "";
 			if (typeof value === "string") text = value;
 			else {
+				// `indent` is only for the request tab, which shows the payload pretty-printed.
+				const pad = Number.isSafeInteger(indent) && indent > 0 ? indent : void 0;
+				// Fast path FIRST. The guarded replacer below keeps a global `seen` set, so it
+				// labels any object that appears twice — including a perfectly ordinary alias
+				// (`[x, x]`, or one schema object reused by two tools) — as "[Circular]".
+				// Plain stringify handles aliases correctly and only fails on a real cycle or
+				// a BigInt, so trying it first means the marked-up output is reserved for the
+				// cases that actually need it.
 				try {
-					const seen = new WeakSet();
-					text = JSON.stringify(value, (k, v) => {
-						if (typeof v === "bigint") return `${String(v)}n`;
-						if (v !== null && typeof v === "object") {
-							if (seen.has(v)) return "[Circular]";
-							seen.add(v);
-						}
-						return v;
-					});
+					text = JSON.stringify(value, null, pad);
 					if (typeof text !== "string") text = String(text);
-				} catch (e) {
-					try { text = String(value); } catch (e2) { text = ""; }
+				} catch (plain) {
+					try {
+						const seen = new WeakSet();
+						text = JSON.stringify(value, (k, v) => {
+							if (typeof v === "bigint") return `${String(v)}n`;
+							if (v !== null && typeof v === "object") {
+								if (seen.has(v)) return "[Circular]";
+								seen.add(v);
+							}
+							return v;
+						}, pad);
+						if (typeof text !== "string") text = String(text);
+					} catch (e) {
+						try { text = String(value); } catch (e2) { text = ""; }
+					}
 				}
 			}
 			const cap = Number.isFinite(limit) ? limit : UNKNOWN_PAYLOAD_LIMIT;
