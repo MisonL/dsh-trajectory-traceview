@@ -212,6 +212,7 @@
 			// Failure is a real outcome (non-secure context, refused permission) and the
 			// button now says so; without a colour the "✗" reads as another label.
 			".dstv_copyBtn[data-fail=true]{border-color:var(--dstv-err);color:var(--dstv-err)}",
+			".dstv_btn[data-fail=true]{border-color:var(--dstv-err);color:var(--dstv-err)}",
 			"details.dstv_det{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}",
 			"details.dstv_det>summary{cursor:pointer;padding:5px 9px;font-size:11.5px;font-weight:600;list-style:none;display:flex;align-items:center;gap:6px}",
 			"details.dstv_det>summary::-webkit-details-marker{display:none}",

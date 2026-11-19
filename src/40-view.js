@@ -211,7 +211,7 @@
 			const [anchorNote, setAnchorNote] = (0, react.useState)(null);
 			const [clockAxis, setClockAxis] = (0, react.useState)(false);
 			const [olderBusy, setOlderBusy] = (0, react.useState)(false);
-			const [mdCopied, setMdCopied] = (0, react.useState)(false);
+			const [exportState, setExportState] = (0, react.useState)("idle");
 			const [anchorInput, setAnchorInput] = (0, react.useState)("");
 			const [hash, setHash] = (0, react.useState)(() => (typeof location !== "undefined" ? location.hash : ""));
 			/**
@@ -773,10 +773,12 @@
 			const doExport = (ev) => {
 				if (ev != null && typeof ev.stopPropagation === "function") ev.stopPropagation();
 				const md = buildTraceMarkdown(tree, t);
+				// Same rule as CopyBtn: a failed copy is a real outcome (non-secure context,
+				// refused permission), and returning silently made the button look dead —
+				// the user believes the whole trace is on the clipboard when it is not.
 				copyText(md, (ok) => {
-					if (!ok) return;
-					setMdCopied(true);
-					setTimeout(() => setMdCopied(false), 1600);
+					setExportState(ok ? "ok" : "fail");
+					setTimeout(() => setExportState("idle"), 1600);
 				});
 			};
 
@@ -903,7 +905,10 @@
 						className: "dstv_btn",
 						title: t("action.exportMd"),
 						onClick: doExport,
-						children: mdCopied === true ? `✓ ${t("action.exported")}` : "📋 Markdown"
+						"data-fail": exportState === "fail" ? "true" : undefined,
+						children: exportState === "ok" ? `✓ ${t("action.exported")}`
+							: exportState === "fail" ? `✗ ${t("anchor.copyFailed")}`
+							: "📋 Markdown"
 					}, "hExport") : null,
 					stats.lastModel != null ? jsx("span", { className: "dstv_modelChip", title: stats.lastModel, children: `🤖 ${stats.lastModel}` }, "hModel") : null,
 					// Announce anchor progress: paging can take many seconds with no other

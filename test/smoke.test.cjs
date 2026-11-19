@@ -1896,6 +1896,16 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (srcCp.indexOf("setCopyState(ok ? \"ok\" : \"fail\")") < 0) {
 			throw new Error("COPY1 a failed copy is still silent");
 		}
+		// The whole-trace Markdown export has the same clipboard and the same silent
+		// return. It was fixed separately and regressed separately, so it is asserted
+		// separately: a dead-looking export button makes the user believe the entire
+		// transcript is on the clipboard when nothing was written.
+		if (srcCp.indexOf("setExportState(ok ? \"ok\" : \"fail\")") < 0) {
+			throw new Error("COPY1 the whole-trace export still fails silently");
+		}
+		if (srcCp.indexOf(".dstv_btn[data-fail=true]") < 0) {
+			throw new Error("COPY1 the export failure state is not styled");
+		}
 		// A visible word needs a visible colour, or "✗ Copy failed" reads as a label.
 		if (srcCp.indexOf(".dstv_copyBtn[data-fail=true]") < 0) {
 			throw new Error("COPY1 the failure state is not styled, so it does not read as a failure");
