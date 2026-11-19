@@ -4610,3 +4610,61 @@ return after !== before;
 
 - 宿主源码读的是 `src/`（TypeScript 源），运行时跑的是 `lib/`。我确认过行为一致（`lib` 是编译产物，逻辑未变），但没有在真实运行环境里注入一次翻页失败来验证。
 - 仍未跑真实浏览器。
+
+### 12.82 第十四、十五轮：提示写着 Tab 键、导出比屏幕少（2026-11-20）
+
+#### 键盘提示写着 ⇤⇥，实际绑的是 PgUp/PgDn（`HINT1`）
+
+header 的提示文案是「⇤⇥ 跳轮次」。`⇤` / `⇥` 是键盘上印 Tab / Shift+Tab 的那个符号。用户照着按 Tab，焦点在面板里移动，什么都没发生——看起来快捷键坏了。
+
+实际绑定是 `PageUp` / `PageDown`。改成写明 `PgUp PgDn`。
+
+守卫断言三件事：提示里不得出现 ⇤/⇥（中英两侧）、必须写明 PgUp/PgDn、这些键确实被绑定。第三个断言是关键——不然把提示改成随便一个键也能过。
+
+#### 导出比屏幕上看到的更少（`EXPORTCODE1`）
+
+详情面板里：
+
+| 站点 | 面板显示 | 导出显示 |
+|---|---|---|
+| error | label + message + **code** | label + message |
+| retry | label + message + **#2/5 · provider · code · retryState** | label + message |
+
+于是"复制这一步"得到的文本比它来源的屏幕**严格更差**。而"第几次重试失败、错误码是什么"恰恰是用户粘进 bug 报告的东西。
+
+补上后：
+
+```
+### ✗ node.error `ERRCODE`
+### ↻ node.retry (#2/5 · provider · code: X · state)
+```
+
+#### 一个我自己造出来的假缺陷
+
+第一版 fixture 我写成：
+
+```js
+{ kind: "turn-error", error: { name: "ERRMARK", message: "ERRMSGMARK" } }
+```
+
+但契约里是 `n.message`，不是 `n.error.message`。于是导出里当然没有 ERRMARK——**是我的数据造错了，不是产品缺陷**。用宿主的真实字段名重测后，只有 `code` 这一类是真的缺。
+
+这已经是这几轮里第三次"先怀疑产品、后发现是自己的探针错了"（前两次是 `TOOLLIST1` 的无效变异、`ANCHORTYPE1` 的错误扫描起点）。记录在这里提醒自己：**报缺陷之前先确认 fixture 是合法的**。
+
+#### 一次自我否决的修复
+
+我一度"修"了请求页的 `open: i === messages.length - 1`——理由是前插历史后这个 prop 会翻。写完后实测：
+
+```
+=== 场景 A：前插（loadOlder）===
+  前: U6 U7 U8 U9 [U10]
+  后: U1 U2 U3 U4 U5 U6 U7 U8 U9 [U10]
+  最后一条是否同一条: ✓ 是 → open 不翻
+```
+
+**前插不会改变"最后一条是谁"**，所以那个 prop 根本不会翻。我推断的场景不存在，改动被 `git checkout` 撤销了。真正会翻的只有追加（流式），而那时"最后一条"确实应该展开——是正确行为。
+
+#### 未验证
+
+- 仍未跑真实浏览器。
+- `EXPORTCODE1` 验证的是 Markdown 字符串内容，不是用户真的点了导出按钮。
