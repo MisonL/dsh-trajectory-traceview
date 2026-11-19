@@ -982,6 +982,25 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── MINIMAP1: the tick strip must scroll, not widen the whole panel ───────
+	// Each tick is `flex:1;min-width:3px` plus a 2px gap, so the strip needs 5px per
+	// station and cannot compress below it. A long session carries thousands of
+	// stations (3,600 measured) = ~18,000px of ticks in a ~1,200px panel; without an
+	// overflow rule the entire conversation was pushed sideways.
+	{
+		const css = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const at = css.indexOf(".dstv_minimap{");
+		if (at < 0) throw new Error("MINIMAP1 the minimap rule is missing");
+		const rule = css.slice(at, css.indexOf("}", at) + 1);
+		if (rule.indexOf("overflow-x:auto") < 0) {
+			throw new Error("MINIMAP1 the minimap can grow without bound and drags the panel with it: " + rule);
+		}
+		// The tick must still be compressible, or scrolling would never engage.
+		const tickAt = css.indexOf(".dstv_miniTick{");
+		const tick = css.slice(tickAt, css.indexOf("}", tickAt) + 1);
+		if (tick.indexOf("min-width:3px") < 0) throw new Error("MINIMAP1 the tick rule changed unexpectedly: " + tick);
+	}
+
 	// ── BLOCKTXT1: a file result must not render as an empty cell ─────────────
 	// `blocksText` handled text/image/reasoning only. The host ships SEVEN ContentBlock
 	// types, and a tool that attaches a file produced a result cell with no text at all
