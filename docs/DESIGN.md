@@ -4280,3 +4280,118 @@ removeChild(ta)  ← 被聚焦的元素消失
 copyText 在无 document/navigator 环境 → 回调 false，不抛
 copyText legacy 路径属性齐全 → readonly ✓ aria-hidden ✓ tabindex ✓ 移除 ✓ 焦点恢复 ✓
 ```
+
+### 12.78 第七轮：投影崩溃 + 守卫伪绿（2026-11-19）
+
+这轮由两个独立审查 agent 交叉驱动，但它们**都在完成前失败了**（一个在写探针前、一个在汇总后半段），所以下面每一条都是我自己重新复现并做变异验证的。审查方给出的 D-1…D-12 里，我确认了 8 条、否证了 2 条、降级了 2 条，逐一记在后面。
+
+#### 已修：投影层
+
+**1. 一个坏字段让整张卡消失**（`TEXTCOERCE1`）
+
+宿主契约把 `TurnErrorNode.message`、`CommandNode.args`、`compaction.summary` 都写成 `string`。契约是契约，不是保证——React 遇到对象直接抛：
+
+```
+Objects are not valid as a React child (found: object with keys {obj})
+```
+
+而这种抛异常发生在**渲染期**：`RenderBoundary` 能救浏览器里的卡片，但 `react-dom/server` 不支持边界，整视图一起没。实测 6 种形状（含数组里嵌对象）全部崩。
+
+修法是在**投影处**加 `asText()`，不是在每个渲染点补 `String()`——补一百处也会漏。对象降级成 JSON 而不是 `[object Object]`：读者至少能看到到达了什么。
+
+**2. `prompt.tools` 里一个 null 条目，整页工具目录消失**（`TOOLLIST1`）
+
+`deriveTraceTree` 确实做了归一化，但它只检查**是不是数组**：
+
+```js
+Array.isArray(found.prompt.tools) ? found.prompt.tools : []
+```
+
+`[null]` 原样穿过。渲染时 `tools.map(t => t.name)` → `Cannot read properties of null (reading 'name')`。一个空洞带走了全部工具。
+
+新增 `safeToolList()`：丢空洞与非对象、把三个要显示的字段强制成字符串、保持顺序。
+
+**3. 请求页四处直接 `JSON.stringify`**（`REQJSON1`）
+
+循环引用 / BigInt schema 会让请求页渲染抛 `TypeError`。改用 `safeJsonPreview`，缩进改成显式可选参数（别的调用方要的是单行）。
+
+#### 已修：我上一轮引入的缺陷
+
+**4. `safeJsonPreview` 把纯别名也标成 `[Circular]`**
+
+上一轮我为了修循环引用，用了"全局 seen 集合"。它把**任何出现两次的对象**都标成 `[Circular]`：
+
+```
+{a: shared, b: shared}       → b: "[Circular]"     ← 合法别名被隐藏
+仅别名（无 BigInt）           → [{n:1},{n:1}]       ← 因为走的是 plain 快路径，看不出来
+```
+
+也就是说：**只要 payload 里另有一个 BigInt 或真循环，所有合法别名就一起被标脏**。这正是我上一轮注释里声称要避免的事，而且守卫只单独测了别名、没和 BigInt 组合，所以全绿。
+
+改成沿 holders 链判断"是不是自己的祖先"。中途试过 push/pop 栈，**不成立**——replacer 不被告知何时离开某个值，永远不会 pop。验证：
+
+```
+别名 + BigInt → b: {"n":1}    ✓
+循环 + 别名   → cyc.self: "[Circular]", a/b 正常  ✓
+自引用数组    → [1,"[Circular]"]  ✓
+```
+
+#### 已修：异步越界（两个都是"没人看着了还在干活"）
+
+**5. 锚点搜索能活过面板**（`ANCHORLIFE1`）
+
+最多 40 页。判据是 `stationsRef.current` 的**数组身份**——组件卸载后这个 ref 冻结在最后一帧，于是"投影变了吗"永远看不到变化：内层 12 次退避（20ms→250ms）跑满，外层 `loadOlder()` 仍在报告增长，继续下一页。给一个已经没人看的会话翻历史。
+
+加 `aliveRef`，在两处 `await` 之后各查一次，并把检查放进**两个入口共用的包装器**（写在各自的 `.then` 里会漏掉一条路径）。
+
+**6. 深链落地后每个新站点都把用户拽回锚点**（`ANCHORDEDUPE1`）
+
+成功落点会把锚点镜像进 URL，而 effect 依赖 `[anchorToken, N]`。于是流式会话每来一个站点就重跑一次，重新 `setRevealed(锚点)` 并停掉回放——深链用户根本没法在时间轴上走开。
+
+修的时候第一次改错了：我直接把 `N` 从依赖里删了。那会让**早到的深链永远落不了地**（锚点在 stations 还是空的时候就到了，全靠 N 增长重试）。正确做法是记住"已落地"的 token：
+
+```js
+void anchorApplyGuarded(wanted).then((ok) => {
+  if (ok) appliedAnchorRef.current = anchorToken;   // 只在成功时记录
+```
+
+失败不进记忆，所以重试仍然有效。守卫同时断言两件事：去重存在、且记录发生在成功之后。
+
+#### 已修：前插历史后身份漂移
+
+**7. 合成站点的 id 含窗口级计数**（`SYNTHID1`）
+
+```js
+id: `sx${turn}-${stepNum}-${stepCounter}`   // stepCounter 是窗口内连续计数
+```
+
+实测同一份数据：
+
+```
+只加载 6–8 轮：  sx9-1    stepNo 4
+前插 1–5 轮后：  sx9-1    stepNo 9     ← 旧写法 id 会变
+```
+
+id 一变，选择修复的 `findIndex` 返回 -1，详情面板**静默**显示同一位置上的另一条记录。改成只用 `turn` + 每轮 `stepNum`，重复时加后缀。
+
+#### 已修：五处守卫是假绿
+
+这轮最有价值的部分。以下每一条都用变异证明过"删掉代码仍然全绿"：
+
+| 守卫 | 伪绿方式 | 现在断言什么 |
+|---|---|---|
+| `Z2` / `SEC1` | 用 `React.createElement` 冒充 `jsx`——第三个参数 key 变成 children，渲染出 **294 字符骨架**仍通过 | 真 `react/jsx-runtime`；非空快照必须出现站点卡片 |
+| `COPY1` | `failLabel` 写在注释里即可满足 | 失败分支表达式本身 `✗ ${failLabel` |
+| `SESSION1` | 在比较后插一句无条件 `return;`，5 个 token 全在源码里 | 第一个 reset 之前不得有 return |
+| `P4` | `void 0; /* setPlayheadLeft(docLeft) */` | `if (Number.isFinite(docLeft)) setPlayheadLeft(docLeft);` |
+| `I18N2` | 英文窗口 `enS + 20000` 越过表尾 1.1 万字符 | 与中文侧用同样的定界 |
+
+#### 一处否证
+
+审查方怀疑 `<details open={...}>` 是受控/非受控混用。**不成立**：React 只在 prop 变化时写 DOM 属性，常量 `open: false` 在用户手动展开后不会被重渲染覆盖回去。真正会变的是 `open: i === messages.length - 1` 配合下标 key——那属于"前插后 DOM 状态错位"，另记。
+
+#### 未验证（诚实记录）
+
+- **没有跑真实浏览器**：所有渲染都是 `react-dom/server`，没有 effect，所以 scroll / measure / focus / clipboard / interval 的运行时行为**没有任何证据**。`ANCHORLIFE1` 的守卫是源码级 + 循环结构检查，不是运行时。
+- **`sessionKey` 重置可能是死代码**：审查方的源码推断是宿主按会话代际重挂载（`key=sessionGenerationKeyOf`），若成立则 `prev !== sessionKey` 分支永不进。我**没有**验证这一点，因此**没有**删这段 effect——它是有害还是无害取决于宿主实现，删掉才是赌。
+- **`client.js` 仍未拆分、真机响应式未复测、npm 未发布**（用户明确暂不发布）。
