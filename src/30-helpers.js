@@ -2051,7 +2051,23 @@ const usedStationIds = new Set();
 				}
 				// Table: a header row followed by a |---|---| separator.
 				if (line.includes("|") && i + 1 < lines.length && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1])) {
-					const cells = (l) => l.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+					// `\|` is the escape for a literal pipe inside a cell — the only way to
+					// put one in a table at all. Splitting on every `|` cut such a cell in
+					// two, so `| a \| b | c |` became THREE columns ("a \", "b", "c") and
+					// every cell after the escape shifted one column left under the header.
+					const cells = (l) => {
+						const body = l.replace(/^\s*\|/, "").replace(/\|\s*$/, "");
+						const out = [];
+						let cur = "";
+						for (let k = 0; k < body.length; k += 1) {
+							const ch = body[k];
+							if (ch === "\\" && body[k + 1] === "|") { cur += "|"; k += 1; continue; }
+							if (ch === "|") { out.push(cur.trim()); cur = ""; continue; }
+							cur += ch;
+						}
+						out.push(cur.trim());
+						return out;
+					};
 					const header = cells(line);
 					i += 2;
 					const rows = [];

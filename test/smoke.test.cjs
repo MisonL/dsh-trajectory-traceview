@@ -1975,6 +1975,86 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (new Set(allIds).size !== allIds.length) throw new Error("SYNTHID1 station ids are no longer unique");
 	}
 
+	// ── ARIA4: a listbox may own only `option` children ───────────────────────
+	// The idle gap band is a `<span>` sitting directly inside `role="listbox"` and was
+	// NOT hidden from assistive tech, so it counted as an item and was read out as
+	// "⏸ idle 5.0 min" between two stations. The playhead beside it was already
+	// `aria-hidden`; this one was missed. The band is pure decoration — the station's
+	// own aria-label already carries the timing.
+	{
+		let ReactAr = null;
+		let rtAr = null;
+		try { ReactAr = require("react"); rtAr = require("react/jsx-runtime"); } catch { ReactAr = null; }
+		if (ReactAr === null) {
+			console.log("ARIA4 SKIPPED: react / react/jsx-runtime not installed");
+		} else {
+			const srcAr = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+			const vmAr = require("node:vm");
+			const boxAr = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
+				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
+				react: ReactAr, jsx: rtAr.jsx, jsxs: rtAr.jsxs, fragment: rtAr.Fragment,
+				document: void 0, window: void 0, location: void 0 };
+			boxAr.globalThis = boxAr;
+			vmAr.createContext(boxAr);
+			const hAr = srcAr.indexOf("//#region pure helpers: snapshot -> timeline tree");
+			const hEnd = srcAr.indexOf("//#endregion", hAr);
+			const cAr = srcAr.indexOf("//#region horizontal timeline + replay component");
+			const cEnd = srcAr.indexOf("//#endregion", cAr);
+			vmAr.runInContext("const fragment = react.Fragment;\n" + srcAr.slice(hAr, hEnd) + "\n" + srcAr.slice(cAr, cEnd) + ";globalThis.__ar={TraceMapView};", boxAr, { timeout: 60000 });
+			// Two stations 10 minutes apart, so the idle band really renders.
+			const gapSnap = { eventNodes: [
+				{ kind: "user", seq: 1, time: 0, turn: 1, content: [{ type: "text", text: "q" }] },
+				{ kind: "assistant", seq: 2, time: 1000, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "a" }] },
+				{ kind: "assistant", seq: 3, time: 600000, turn: 1, step: 2, messageId: "m2", blocks: [{ kind: "text", text: "b" }] }
+			], requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+			const html = require("react-dom/server").renderToStaticMarkup(rtAr.jsx(boxAr.__ar.TraceMapView, {
+				useSession: (sel) => { try { return sel({ openState: "open" }); } catch { return void 0; } },
+				useTrajectory: () => gapSnap,
+				t: (k) => k,
+				viewRequest: null,
+				completeViewRequest: () => {},
+				loadOlder: async () => false
+			}));
+			if (!html.includes("dstv_gapBand")) throw new Error("ARIA4 the fixture rendered no idle band, so the guard proves nothing");
+			const gapAt = html.indexOf('class="dstv_gapBand');
+			const gapTagStart = html.lastIndexOf("<", gapAt);
+			const gapTag = html.slice(gapTagStart, html.indexOf(">", gapAt) + 1);
+			if (gapTag.indexOf('aria-hidden="true"') < 0) {
+				throw new Error("ARIA4 the idle band is exposed to assistive tech: " + gapTag.slice(0, 140));
+			}
+			// The playhead must stay hidden too — it is the same class of decoration.
+			if (!/class="dstv_playhead" aria-hidden="true"/.test(html) && html.includes("dstv_playhead")) {
+				throw new Error("ARIA4 the playhead became exposed");
+			}
+		}
+	}
+
+	// ── MD4: a table cell may contain an escaped pipe ─────────────────────────
+	// `\|` is the only way to put a literal pipe inside a table cell. Splitting on
+	// every `|` cut that cell in two, so `| a \| b | c |` produced THREE columns and
+	// every cell after the escape shifted one column left under the header — the row
+	// silently disagreed with its own header.
+	{
+		const esc = mdBlocks("| a \\| b | c |\n| - | - |\n| 1 | 2 |");
+		if (esc[0].type !== "table") throw new Error("MD4 a table with an escaped pipe is not a table");
+		if (esc[0].head.length !== 2) {
+			throw new Error("MD4 an escaped pipe split the cell: " + JSON.stringify(esc[0].head));
+		}
+		if (esc[0].head[0] !== "a | b") {
+			throw new Error("MD4 the escape was not turned back into a pipe: " + JSON.stringify(esc[0].head[0]));
+		}
+		if (esc[0].head[1] !== "c") throw new Error("MD4 the cell after the escape shifted column");
+		// Ordinary tables, code spans holding a bare pipe, and trailing pipes must not
+		// regress — the escape handling must be additive.
+		const plain = mdBlocks("| a | b |\n| - | - |\n| 1 | 2 |");
+		if (plain[0].head.join(",") !== "a,b") throw new Error("MD4 a plain table broke: " + JSON.stringify(plain[0].head));
+		const codeSpan = mdBlocks("| `x` | y |\n| - | - |\n| 1 | 2 |");
+		if (codeSpan[0].head.join(",") !== "`x`,y") throw new Error("MD4 a code-span cell broke: " + JSON.stringify(codeSpan[0].head));
+		// A row without the trailing pipe must still split correctly.
+		const noTrail = mdBlocks("| a | b\n| - | -\n| 1 | 2");
+		if (noTrail[0].head.join(",") !== "a,b") throw new Error("MD4 a table without trailing pipes broke: " + JSON.stringify(noTrail[0].head));
+	}
+
 	// ── MD3: an empty link label must not swallow the text around it ──────────
 	// `[](https://x)` is legal Markdown. The scanner asked for the next `]` STRICTLY
 	// after `i+1`, so a `]` sitting exactly at `i+1` was invisible to it. The breakage

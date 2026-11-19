@@ -1381,10 +1381,17 @@
 									// elapsed time (log-scaled and capped), so a long pause looks long.
 									// Station cards keep their fixed width — only the idle spacing scales.
 									const gapWidth = showGap ? clockGapWidth(gapMs, clockAxis) : null;
+									// A listbox may own only `option` (or `group`) children. The idle band is
+									// decoration — the station's own aria-label already carries the timing —
+									// so leaving it exposed put a non-option, non-tabbable span inside the
+									// list: screen readers reported extra items in the count and read
+									// "⏸ idle 5.0 min" as if it were a station. The playhead next to it was
+									// already hidden; this one was missed.
 									const gapPrefix = showGap ? [jsx("span", {
 										className: `dstv_gapBand${clockAxis ? " scaled" : ""}`,
 										style: gapWidth !== null ? { width: gapWidth, minWidth: gapWidth } : undefined,
 										title: `${t("gap.idle")} ${fmtMs(gapMs)}`,
+										"aria-hidden": "true",
 										children: `⏸ ${fmtMs(gapMs)}`
 									}, `gap${s.id}`)] : [];
 									let dotCls = "dstv_hDot";
