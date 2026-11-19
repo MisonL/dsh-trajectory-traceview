@@ -1858,6 +1858,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── ANCHOR6: an impossible anchor must be rejected, not chased ───────────
+	// Turns and steps are 1-based everywhere in the projection, so `t0` / `s0` name no
+	// record. Accepting them was not harmless: resolution answered "not-loaded", which
+	// makes the view page back up to 40 times hunting a record that can never arrive,
+	// then blame the page cap. Long digit runs overflowed to Infinity the same way.
+	// `e<seq>` already used `Number.isSafeInteger`; the `t`/`p` branches did not.
+	{
+		const bad = ["tvp1:t0s1", "tvp1:t1s0", "tvp1:p0s1", "tvp1:p1s0",
+			"tvp1:t" + "9".repeat(400) + "s1", "tvp1:p1s" + "9".repeat(400),
+			"tvp1:t0s0", "tvp1:p0s0"];
+		for (const b of bad) {
+			const parsed = parseAnchor(b);
+			if (parsed.ok === true) {
+				throw new Error("ANCHOR6 " + JSON.stringify(b.slice(0, 40)) + " parses as a valid anchor (turn=" + parsed.turn + ", step=" + parsed.step + ")");
+			}
+		}
+		// The rejecting must not be over-eager: real anchors still work.
+		const good = [["tvp1:t1s1", 1, 1], ["tvp1:p2s3", 2, 3], ["tvp1:p2s3cabc", 2, 3], ["tvp1:t17s42", 17, 42]];
+		for (const [g, turn, step] of good) {
+			const parsed = parseAnchor(g);
+			if (parsed.ok !== true) throw new Error("ANCHOR6 " + g + " must stay valid (reason " + parsed.reason + ")");
+			if (parsed.turn !== turn || parsed.step !== step) {
+				throw new Error("ANCHOR6 " + g + " parsed as turn " + parsed.turn + " step " + parsed.step);
+			}
+		}
+	}
+
 	// ── COPYFOCUS1: the legacy copy path must not eat focus ───────────────────
 	// `navigator.clipboard` does not exist on plain http://, so the textarea +
 	// `execCommand` path is the COMMON one, not a museum piece. It did `ta.select()`
