@@ -1862,10 +1862,17 @@
 						] }, "mNote"),
 						jsx("div", { className: "dstv_dBody", style: { padding: 0 }, children: messages.map((m, i) => {
 							const preview = m.text !== "" ? m.text : (m.role === "tool" ? `${m.toolCallId ?? ""}${m.isError ? " ✗" : ""}` : "…");
+							// Key on the message's OWN identity, not its position. This list is
+							// rebuilt whenever the station window grows backwards, and paging
+							// PREPENDS messages: index 3 stops being the message it was, so React
+							// reused the DOM node and the row that was expanded started showing a
+							// different message's body. `seq` is the durable record number; the
+							// hash fallback keeps abnormally shaped nodes unique anyway.
+							const msgKey = `m${m.seq != null ? `s${String(m.seq)}` : `x${String(i)}`}-${m.role}`;
 							return jsxs("details", { className: "dstv_det", open: i === messages.length - 1, children: [
-								jsx("summary", { children: [jsx("span", { className: `dstv_msgRole ${m.role}`, children: m.role === "note" ? t("node.compaction") : m.role }, "mr"), jsx("span", { className: "dstv_msgPrev", children: firstLine(preview) }, "mp"), jsx("span", { className: "sub", children: String(m.text.length) }, "ml")] }, `ms${i}`),
-								jsx("div", { className: "inner", children: jsx("div", { className: "dstv_code", style: { maxHeight: 200 }, children: m.text !== "" ? m.text : safeJsonPreview(m.content, Number.MAX_SAFE_INTEGER, 2) }, "mc") }, `mi${i}`)
-							] }, `m${i}`);
+								jsx("summary", { children: [jsx("span", { className: `dstv_msgRole ${m.role}`, children: m.role === "note" ? t("node.compaction") : m.role }, "mr"), jsx("span", { className: "dstv_msgPrev", children: firstLine(preview) }, "mp"), jsx("span", { className: "sub", children: String(m.text.length) }, "ml")] }, `${msgKey}s`),
+								jsx("div", { className: "inner", children: jsx("div", { className: "dstv_code", style: { maxHeight: 200 }, children: m.text !== "" ? m.text : safeJsonPreview(m.content, Number.MAX_SAFE_INTEGER, 2) }, "mc") }, `${msgKey}i`)
+							] }, msgKey);
 						}) }, "mList")
 					] }, "mSec") : null
 				] }, "reqBody");

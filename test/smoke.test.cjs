@@ -1881,6 +1881,46 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── MSGKEY1: request-tab rows must keep their identity when history is prepended ──
+	// The request tab keyed every row on its ARRAY INDEX. That list is rebuilt whenever
+	// the station window grows backwards, and paging PREPENDS messages: index 0 stops
+	// being the message it was. React then reuses the DOM node, so a row the reader had
+	// expanded starts showing a different message's body, and the newly-last row expands
+	// by itself. `seq` is the durable record number.
+	{
+		const mkSeq = (from, to) => {
+			const out = [];
+			for (let i = from; i <= to; i += 1) out.push({ kind: "user", seq: i, time: i, turn: i, content: [{ type: "text", text: "U" + i }] });
+			return out;
+		};
+		const tailMsgs = reconstructMessages(mkSeq(6, 10), 999, t);
+		const fullMsgs = reconstructMessages(mkSeq(1, 10), 999, t);
+		if (tailMsgs.length !== 5 || fullMsgs.length !== 10) throw new Error("MSGKEY1 the fixture rebuilt the wrong number of messages");
+		// The identity must be carried at all — without it every key falls back to the index.
+		for (const m of fullMsgs) {
+			if (m.seq === void 0 || m.seq === null) {
+				throw new Error("MSGKEY1 a reconstructed message has no `seq`, so its key can only be positional: " + JSON.stringify(m.text));
+			}
+		}
+		// U6 and U10 really do move position; their identity must not.
+		const before = tailMsgs.find((m) => m.text === "U6");
+		const after = fullMsgs.find((m) => m.text === "U6");
+		if (before.seq !== after.seq) {
+			throw new Error("MSGKEY1 the same message reports a different seq before and after prepending (" + before.seq + " -> " + after.seq + ")");
+		}
+		if (tailMsgs.indexOf(before) === fullMsgs.indexOf(after)) {
+			throw new Error("MSGKEY1 the fixture is useless: prepending did not move the message");
+		}
+		// And the view must actually key on it rather than on `i`.
+		const srcMk = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (srcMk.indexOf("const msgKey = `m${m.seq != null") < 0) {
+			throw new Error("MSGKEY1 the request rows are not keyed by message identity");
+		}
+		if (/}, `m\$\{i\}`\)/.test(srcMk)) {
+			throw new Error("MSGKEY1 a request row is still keyed by its index");
+		}
+	}
+
 	// ── MINITAB1: the minimap must not be 200 extra Tab stops ─────────────────
 	// The minimap is a SECOND navigation affordance for the SAME stations the timeline
 	// already exposes, but every tick was a plain <button>. Measured on a rendered view:

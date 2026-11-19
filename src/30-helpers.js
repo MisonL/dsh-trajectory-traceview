@@ -477,10 +477,16 @@
 		/** Reconstruct the model-visible message list sent before seq `beforeSeq`. */
 		function reconstructMessages(nodes, beforeSeq, tr) {
 			const out = [];
+			// `seq` rides along as the message's IDENTITY. The request tab keys its rows on
+			// the array index, and this list is rebuilt whenever the station window grows
+			// backwards — paging in older history PREPENDS messages, so index 3 stops being
+			// the message it was. With index keys React reuses the DOM node and an expanded
+			// `<details>` ends up showing a different message's body, while the collapsed one
+			// below it silently expands.
 			for (const n of nodes) {
 				if (beforeSeq != null && n.seq >= beforeSeq) break;
 				if (n.kind === "user" || n.kind === "steering" || n.kind === "context") {
-					out.push({ role: "user", content: n.content ?? [], text: blocksText(n.content, tr) });
+					out.push({ role: "user", seq: n.seq ?? null, content: n.content ?? [], text: blocksText(n.content, tr) });
 				} else if (n.kind === "assistant") {
 					const content = (n.blocks ?? []).map((b) => {
 						if (b.kind === "tool-call") return { type: "tool-call", id: b.callId, name: b.name, arguments: b.argsRaw };
@@ -490,15 +496,15 @@
 						return { type: "other", data: b.block };
 					});
 					const text = (n.blocks ?? []).map((b) => (b.kind === "text" ? b.text : b.kind === "reasoning" ? b.text : "")).join("\n").trim();
-					out.push({ role: "assistant", content, text });
+					out.push({ role: "assistant", seq: n.seq ?? null, content, text });
 				} else if (n.kind === "tool-result") {
-					out.push({ role: "tool", content: n.content ?? [], toolCallId: n.callId, isError: n.isError === true, text: blocksText(n.content, tr) });
+					out.push({ role: "tool", seq: n.seq ?? null, content: n.content ?? [], toolCallId: n.callId, isError: n.isError === true, text: blocksText(n.content, tr) });
 				} else if (n.kind === "compaction") {
 					const head = firstLine(n.summary ?? "");
 					const cpt = typeof tr === "function" ? tr : (k) => k;
 					// The decorative CJK brackets were hardcoded too; move them into the locale so
 					// the English UI gets parentheses instead.
-					out.push({ role: "note", content: [], text: `${cpt("note.wrapL")}${cpt("note.compaction")}${head !== "" ? head : cpt("note.compacted")}${cpt("note.wrapM")}${cpt("note.replace")} ${n.shadowedItemCount ?? "?"} ${cpt("note.items")} / ${cpt("note.about")} ${fmtTokens(n.shadowedTokenCount)} tokens${cpt("note.wrapR")}` });
+					out.push({ role: "note", seq: n.seq ?? null, content: [], text: `${cpt("note.wrapL")}${cpt("note.compaction")}${head !== "" ? head : cpt("note.compacted")}${cpt("note.wrapM")}${cpt("note.replace")} ${n.shadowedItemCount ?? "?"} ${cpt("note.items")} / ${cpt("note.about")} ${fmtTokens(n.shadowedTokenCount)} tokens${cpt("note.wrapR")}` });
 				}
 			}
 			return out;
