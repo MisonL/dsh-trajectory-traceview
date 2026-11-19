@@ -211,6 +211,7 @@
 			const [anchorNote, setAnchorNote] = (0, react.useState)(null);
 			const [clockAxis, setClockAxis] = (0, react.useState)(false);
 			const [olderBusy, setOlderBusy] = (0, react.useState)(false);
+			const [olderNote, setOlderNote] = (0, react.useState)(null);
 			const [exportState, setExportState] = (0, react.useState)("idle");
 			const [anchorInput, setAnchorInput] = (0, react.useState)("");
 			const [hash, setHash] = (0, react.useState)(() => (typeof location !== "undefined" ? location.hash : ""));
@@ -310,6 +311,7 @@
 				setRevealed(null);      // overview: show the whole new transcript
 				setQueryRaw("");
 				setMatchPtr(0);
+				setOlderNote(null);
 				setPanelFull(false);
 				setTab("detail");
 			}, [sessionKey]);
@@ -763,9 +765,14 @@
 			const doLoadOlder = () => {
 				if (typeof loadOlder !== "function" || olderBusy === true || loadingOlder) return;
 				setOlderBusy(true);
+				setOlderNote(null);
 				Promise.resolve()
 					.then(() => loadOlder())
-					.catch(() => undefined)
+					// A failed page used to be indistinguishable from a fast one: the button
+					// flipped to "loading", flipped back, and the timeline did not grow. The
+					// user retries a request that is already being refused (offline, expired
+					// session, host error) with no way to know why nothing appears.
+					.catch(() => setOlderNote(t("action.loadOlderFailed")))
 					.finally(() => setOlderBusy(false));
 			};
 
@@ -913,8 +920,9 @@
 					stats.lastModel != null ? jsx("span", { className: "dstv_modelChip", title: stats.lastModel, children: `🤖 ${stats.lastModel}` }, "hModel") : null,
 					// Announce anchor progress: paging can take many seconds with no other
 					// feedback for screen-reader users (the chip changing is silent).
-					jsx("span", { className: "dstv_visuallyHidden", "aria-live": "polite", "aria-atomic": "true", children: anchorNote ?? "" }, "hAnchorLive"),
+					jsx("span", { className: "dstv_visuallyHidden", "aria-live": "polite", "aria-atomic": "true", children: [anchorNote, olderNote].filter((x) => x !== null).join(" · ") }, "hAnchorLive"),
 					anchorNote !== null ? jsx("span", { className: "dstv_chip warn", title: anchorNote, children: anchorNote }, "hAnchorNote") : null,
+					olderNote !== null ? jsx("span", { className: "dstv_chip warn", title: olderNote, children: olderNote }, "hOlderNote") : null,
 					// A malformed record alongside healthy ones used to be reported ONLY on the
 					// empty branch, so a partly-broken session looked perfectly fine in the
 					// header while silently dropping data.

@@ -1858,6 +1858,29 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── LOADOLDER1: a refused history page must say so ────────────────────────
+	// The button flipped to "loading", flipped back, and the timeline simply did not
+	// grow. Offline / expired session / host error all looked identical to "nothing
+	// more to load", so the user retried a request that was already being refused.
+	{
+		const srcLo = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/catch\(\(\) => setOlderNote\(t\("action.loadOlderFailed"\)\)\)/.test(srcLo)) {
+			throw new Error("LOADOLDER1 a failed history page is still swallowed");
+		}
+		if (srcLo.indexOf("hOlderNote") < 0) throw new Error("LOADOLDER1 the failure note is never rendered");
+		// It must reach assistive tech too: the chip appears without any focus move.
+		const live = srcLo.slice(srcLo.indexOf("hAnchorLive") - 400, srcLo.indexOf("hAnchorLive") + 60);
+		if (live.indexOf("olderNote") < 0) {
+			throw new Error("LOADOLDER1 the failure is only visual, screen readers never hear it");
+		}
+		// And it must be cleared when the conversation changes, or a fresh session
+		// opens already claiming a failure that belongs to the previous one.
+		const sess = srcLo.slice(srcLo.indexOf("const prev = sessionRef.current;"));
+		if (sess.slice(0, 900).indexOf("setOlderNote(null)") < 0) {
+			throw new Error("LOADOLDER1 the note survives a session switch");
+		}
+	}
+
 	// ── COPY1: a failed copy must be visible, and must not crash ──────────────
 	// Two separate defects, both invisible to a server-render test:
 	//   - `copyText` failures returned silently, so a click looked ignored and the user
