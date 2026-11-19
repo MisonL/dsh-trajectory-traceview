@@ -982,6 +982,38 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── HASH1: the URL written must be the URL that reads back ────────────────
+	// `parseAnchor` trims and strips ONE leading `#`, so `#tvp1:e2` is a form it
+	// accepts. `nextHashFor` did neither, so that same input was mirrored into the
+	// address bar as `##tvp1:e2` — a link that worked in this tab and told everyone
+	// else "锚点格式无法识别".
+	{
+		const trH = deriveTraceTree({ eventNodes: [
+			{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "q" }] },
+			{ kind: "assistant", seq: 2, time: 2, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }
+		], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		for (const input of ["tvp1:e2", "#tvp1:e2", "  #tvp1:e2  ", "  tvp1:e2  "]) {
+			const written = nextHashFor("", input).hash;
+			const back = parseAnchor(written);
+			if (back.ok !== true) {
+				throw new Error("HASH1 the URL mirror for " + JSON.stringify(input) + " is " + JSON.stringify(written) + ", which does not parse back");
+			}
+			const res = resolveAnchorInStations(back, trH.stations);
+			if (res.ok !== true) {
+				throw new Error("HASH1 " + JSON.stringify(input) + " -> " + JSON.stringify(written) + " does not resolve (" + res.reason + ")");
+			}
+		}
+		// Idempotent: re-mirroring must be a no-op, otherwise replaceState loops.
+		const once = nextHashFor("", "#tvp1:e2").hash;
+		const twice = nextHashFor(once, "#tvp1:e2");
+		if (twice.changed !== false || twice.hash !== once) {
+			throw new Error("HASH1 mirroring is not idempotent: " + JSON.stringify(once) + " -> " + JSON.stringify(twice));
+		}
+		// An empty anchor must never clear the current hash.
+		const keep = nextHashFor("#tvp1:e2", "");
+		if (keep.changed !== false || keep.hash !== "#tvp1:e2") throw new Error("HASH1 an empty anchor must leave the hash alone");
+	}
+
 	// ── MINIMAP1: the tick strip must scroll, not widen the whole panel ───────
 	// Each tick is `flex:1;min-width:3px` plus a 2px gap, so the strip needs 5px per
 	// station and cannot compress below it. A long session carries thousands of
