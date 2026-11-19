@@ -987,6 +987,30 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── PREFIX3: single-step export must use the per-turn step number ─────────
+	// `buildStepMarkdown` titled the pack "步骤 2.4" while the card for that same
+	// station read "步骤 2" — `stepNo` is the window-wide ordinal. The number also
+	// depended on how much history happened to be loaded when the export ran.
+	{
+		const nodesP = []; let sP = 1;
+		for (let turn = 1; turn <= 2; turn += 1) {
+			nodesP.push({ kind: "user", seq: sP++, time: 1000 + sP, turn, content: [{ type: "text", text: "q" + turn }] });
+			nodesP.push({ kind: "assistant", seq: sP++, time: 1000 + sP, turn, step: 1, messageId: "m" + turn, blocks: [{ kind: "text", text: "a" }] });
+			nodesP.push({ kind: "assistant", seq: sP++, time: 1000 + sP, turn, step: 2, messageId: "mb" + turn, blocks: [{ kind: "text", text: "b" }] });
+		}
+		const trP3 = deriveTraceTree({ eventNodes: nodesP, requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		for (const st3 of trP3.stations.filter((x) => x.kind === "step")) {
+			const title = buildStepMarkdown(st3, [], false, t).split("\n")[0];
+			const expected = `${st3.turn}.${st3.turnStep}`;
+			if (title.indexOf(expected) < 0) {
+				throw new Error("PREFIX3 step export is titled " + JSON.stringify(title) + ", expected turn.step " + expected + " (stepNo=" + st3.stepNo + ")");
+			}
+			if (st3.turnStep !== st3.stepNo && title.indexOf("." + String(st3.stepNo)) >= 0 && String(st3.stepNo) !== String(st3.turnStep)) {
+				throw new Error("PREFIX3 step export used the window-wide stepNo " + st3.stepNo + ": " + JSON.stringify(title));
+			}
+		}
+	}
+
 	// ── PREFIX2: the header number must survive history paging ────────────────
 	// `currentStepNo` came from the window-wide `stepCounter` while the station's own
 	// label used the per-turn number. Two consequences: the header said "当前 步骤 1"

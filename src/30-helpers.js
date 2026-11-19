@@ -1638,7 +1638,12 @@ const usedStationIds = new Set();
 		function buildStepMarkdown(station, messages, hasMore, t) {
 			const L = [];
 			if (station == null) return "";
-			const head = station.kind === "step" ? `${t("node.step")} ${station.turn ?? "?"}.${station.stepNo ?? "?"}` : station.kind;
+			// Same per-turn rule as everywhere else the step number is shown. `stepNo` is
+			// the window-wide ordinal: exporting single steps produced "步骤 1.7" for a
+			// reply that its own card calls "步骤 1", and the number changed depending on
+			// how much history happened to be loaded when the export ran.
+			const stepNum = Number.isFinite(station.turnStep) ? station.turnStep : station.stepNo;
+			const head = station.kind === "step" ? `${t("node.step")} ${station.turn ?? "?"}.${stepNum ?? "?"}` : station.kind;
 			L.push(`# ${t("export.stepTitle")} · ${head}`);
 			L.push("");
 			const anchor = anchorOf(station);
