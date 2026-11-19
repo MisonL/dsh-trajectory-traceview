@@ -89,6 +89,15 @@
 				// pure-function callers stay valid.
 				else if (b.type === "image") parts.push(typeof t === "function" ? t("block.image") : "image");
 				else if (b.type === "reasoning" && typeof b.text === "string" && b.text !== "") parts.push(b.text);
+				// A tool that attaches a file (a reader, an exporter) produced an EMPTY
+				// result cell: `file` was not handled here at all, so the card showed
+				// nothing for a result that plainly existed. The attachment name is the
+				// only usable identifier, so show it when present.
+				else if (b.type === "file") {
+					const fname = typeof b.attachment?.name === "string" && b.attachment.name !== "" ? b.attachment.name : null;
+					const flabel = typeof t === "function" ? t("block.file") : "file";
+					parts.push(fname !== null ? `${flabel}: ${fname}` : flabel);
+				}
 			}
 			return parts.join("\n");
 		}

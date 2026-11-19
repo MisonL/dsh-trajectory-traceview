@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf, blocksText });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf, blocksText } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -979,6 +979,24 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			const walk2 = (l) => { for (const x of l || []) { total += 1; walk2(x.subCalls); } };
 			walk2(cell.subCalls);
 			if (total > 2100) throw new Error("PERF3 the budget must be SHARED across all roots of one tool cell, got " + total + " nodes");
+		}
+	}
+
+	// ── BLOCKTXT1: a file result must not render as an empty cell ─────────────
+	// `blocksText` handled text/image/reasoning only. The host ships SEVEN ContentBlock
+	// types, and a tool that attaches a file produced a result cell with no text at all
+	// — an empty box for a result that plainly existed.
+	{
+		const dict = { "block.image": "[image]", "block.file": "[file]" };
+		const tt = (k) => (dict[k] !== void 0 ? dict[k] : k);
+		const named = blocksText([{ type: "file", attachment: { name: "report.pdf" } }], tt);
+		if (named.indexOf("report.pdf") < 0) throw new Error("BLOCKTXT1 a file result lost its attachment name: " + JSON.stringify(named));
+		const anon = blocksText([{ type: "file" }], tt);
+		if (anon.trim() === "") throw new Error("BLOCKTXT1 a nameless file result rendered as an empty cell");
+		// Mixed content keeps order and does not drop the file.
+		const mixed = blocksText([{ type: "text", text: "result" }, { type: "file", attachment: { name: "a.csv" } }], tt);
+		if (mixed.indexOf("result") < 0 || mixed.indexOf("a.csv") < 0) {
+			throw new Error("BLOCKTXT1 mixed content lost a part: " + JSON.stringify(mixed));
 		}
 	}
 
