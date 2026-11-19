@@ -155,12 +155,22 @@
 			// http:// (non-secure context) and `execCommand` can refuse too, so failure is
 			// a normal outcome that has to be visible.
 			const [copyState, setCopyState] = (0, react.useState)("idle");
+			// Only one feedback timer may be pending. Clicking twice within the window
+			// started a SECOND timer without cancelling the first, so the earlier one
+			// fired first and cleared the state the newer click had just set — the button
+			// reverted to its idle label and the second copy looked ignored, which is
+			// exactly the confusion this three-state feedback exists to prevent.
+			const resetRef = (0, react.useRef)(null);
 			const doCopy = () => {
 				copyText(text, (ok) => {
 					setCopyState(ok ? "ok" : "fail");
-					setTimeout(() => setCopyState("idle"), 1400);
+					if (resetRef.current !== null) clearTimeout(resetRef.current);
+					resetRef.current = setTimeout(() => { resetRef.current = null; setCopyState("idle"); }, 1400);
 				});
 			};
+			(0, react.useEffect)(() => () => {
+				if (resetRef.current !== null) { clearTimeout(resetRef.current); resetRef.current = null; }
+			}, []);
 			return jsx("button", {
 				type: "button",
 				className: "dstv_copyBtn",
@@ -233,6 +243,8 @@
 			const [olderBusy, setOlderBusy] = (0, react.useState)(false);
 			const [olderNote, setOlderNote] = (0, react.useState)(null);
 			const [exportState, setExportState] = (0, react.useState)("idle");
+			// One pending feedback timer for the export button (see doExport).
+			const exportResetRef = (0, react.useRef)(null);
 			const [anchorInput, setAnchorInput] = (0, react.useState)("");
 			const [hash, setHash] = (0, react.useState)(() => (typeof location !== "undefined" ? location.hash : ""));
 			/**
@@ -335,6 +347,12 @@
 				setPanelFull(false);
 				setTab("detail");
 			}, [sessionKey]);
+
+			// Drop the export feedback timer with the panel, so a pending reset cannot fire
+			// against a component that no longer exists.
+			(0, react.useEffect)(() => () => {
+				if (exportResetRef.current !== null) { clearTimeout(exportResetRef.current); exportResetRef.current = null; }
+			}, []);
 
 			// Stop at the end.
 			(0, react.useEffect)(() => {
@@ -837,7 +855,10 @@
 				// the user believes the whole trace is on the clipboard when it is not.
 				copyText(md, (ok) => {
 					setExportState(ok ? "ok" : "fail");
-					setTimeout(() => setExportState("idle"), 1600);
+					// Same one-timer rule as CopyBtn: without clearing the previous timer a
+					// second click's feedback is wiped early by the first click's timeout.
+					if (exportResetRef.current !== null) clearTimeout(exportResetRef.current);
+					exportResetRef.current = setTimeout(() => { exportResetRef.current = null; setExportState("idle"); }, 1600);
 				});
 			};
 
@@ -1896,6 +1917,13 @@
 							jsx("button", { type: "button", className: "dstv_btn dstv_panelToggle", title: panelFull ? t("action.collapsePanel") : t("action.expandPanel"), onClick: () => setPanelFull((v) => !v), children: panelFull ? "⤡" : "⤢" }, "dToggle")
 						]
 					}, "dHead"),
+					// The key must include WHAT is being rendered, not just where. An error
+					// boundary keeps its error state until it is unmounted or the user presses
+					// retry, so a fixed key pinned one station's crash onto every later
+					// station: selecting a perfectly good record still showed "render failed"
+					// and only a manual retry cleared it. Switching tabs had the same problem.
+					// Station cards already key on `card${s.id}`; this boundary was the one
+					// place that forgot, because there is only one of it.
 					jsx(RenderBoundary, {
 						label: t("error.render"),
 						retryLabel: t("error.retry"),
@@ -1904,7 +1932,7 @@
 						render: () => (showTab === "request" && canRequest
 							? activeStation.kind === "compaction" ? renderCompactionRequestBody(activeStation) : renderRequestBody(activeStation, activeMessages)
 							: renderDetailBody(activeStation))
-					}, "dBodySafe")
+					}, `dBodySafe:${String(activeStation.id)}:${showTab}`)
 				]
 			}, "rootDetail");
 

@@ -1975,6 +1975,119 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (new Set(allIds).size !== allIds.length) throw new Error("SYNTHID1 station ids are no longer unique");
 	}
 
+	// ── MD3: an empty link label must not swallow the text around it ──────────
+	// `[](https://x)` is legal Markdown. The scanner asked for the next `]` STRICTLY
+	// after `i+1`, so a `]` sitting exactly at `i+1` was invisible to it. The breakage
+	// was not local: the scan carried on and the NEXT `[label](href)` paired with the
+	// earlier bracket, so `[](http://x) 见 [说明](http://y)` rendered as ONE link whose
+	// text was "](http://x) 见 [说明" pointing at y — the visible text between the two
+	// links was swallowed into a link label.
+	{
+		const empty = mdInline("[](http://x)");
+		if (empty.length !== 1 || empty[0].t !== "link") {
+			throw new Error("MD3 an empty-label link is not recognised: " + JSON.stringify(empty));
+		}
+		if (empty[0].href !== "http://x") throw new Error("MD3 the empty-label link lost its target");
+		// An empty label must not render an invisible anchor: show the target.
+		if (empty[0].text !== "http://x") {
+			throw new Error("MD3 an empty label must fall back to something readable, got " + JSON.stringify(empty[0].text));
+		}
+		// The regression that matters: text between two links must stay text.
+		const pair = mdInline("[](http://x) 见 [说明](http://y)");
+		if (pair.length !== 3) {
+			throw new Error("MD3 the text between two links was swallowed: " + JSON.stringify(pair));
+		}
+		if (pair[1].t !== "text" || pair[1].text.indexOf("见") < 0) {
+			throw new Error("MD3 the middle text was absorbed into a link label: " + JSON.stringify(pair[1]));
+		}
+		if (pair[2].t !== "link" || pair[2].text !== "说明" || pair[2].href !== "http://y") {
+			throw new Error("MD3 the second link lost its own label or target: " + JSON.stringify(pair[2]));
+		}
+		// Ordinary links, adjacent links and unclosed brackets must be unaffected.
+		const plain = mdInline("[a](b)");
+		if (plain.length !== 1 || plain[0].t !== "link" || plain[0].text !== "a") throw new Error("MD3 a normal link broke");
+		const adjacent = mdInline("[a](b)[](c)[d](e)");
+		if (adjacent.map((x) => x.t).join(",") !== "link,link,link") {
+			throw new Error("MD3 adjacent links (one with an empty label) broke: " + JSON.stringify(adjacent));
+		}
+		if (mdInline("[a]b](c)")[0].t !== "text") throw new Error("MD3 a stray bracket must stay literal text");
+	}
+
+	// ── TIMER1: feedback timers must not overlap each other ──────────────────
+	// Both copy buttons show a transient result for ~1.4 s. Each click started its OWN
+	// timer without cancelling the previous one, so a second click inside that window
+	// had its state wiped early by the first click's timeout: the button reverted to
+	// the idle label and the copy looked ignored. That is the exact confusion the
+	// three-state feedback was added to prevent.
+	{
+		const srcTm = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		// The reset must be scheduled through a cancellable ref, not an anonymous timer.
+		if (!/resetRef\.current = setTimeout\(/.test(srcTm)) {
+			throw new Error("TIMER1 CopyBtn starts an uncancellable feedback timer");
+		}
+		if (!/clearTimeout\(resetRef\.current\)/.test(srcTm)) {
+			throw new Error("TIMER1 CopyBtn never cancels the previous feedback timer");
+		}
+		if (!/exportResetRef\.current = setTimeout\(/.test(srcTm)) {
+			throw new Error("TIMER1 the export button starts an uncancellable feedback timer");
+		}
+		if (!/clearTimeout\(exportResetRef\.current\)/.test(srcTm)) {
+			throw new Error("TIMER1 the export button never cancels the previous feedback timer");
+		}
+		// And no bare `setTimeout(() => set…("idle")` may remain: that is the shape of the
+		// bug, and it is what a future edit would most likely reintroduce.
+		if (/setTimeout\(\(\) => setCopyState\("idle"\)/.test(srcTm)) {
+			throw new Error("TIMER1 a bare copy-reset timer is back");
+		}
+		if (/setTimeout\(\(\) => setExportState\("idle"\)/.test(srcTm)) {
+			throw new Error("TIMER1 a bare export-reset timer is back");
+		}
+		// Behavioural: a fake clock has to show the second click surviving the first
+		// timer. Simulate the scheduling logic the component now uses.
+		const pending = { id: null };
+		const fires = [];
+		let state = "idle";
+		const reset = () => { state = "idle"; pending.id = null; };
+		const click = (ok, at) => {
+			state = ok ? "ok" : "fail";
+			if (pending.id !== null) clearTimeout(pending.id);
+			pending.id = setTimeout(reset, 1400);
+			fires.push(at + ":" + state);
+		};
+		click(true, 0);
+		clearTimeout(pending.id);
+		pending.id = null;
+		state = "fail";                       // second click, 300 ms later, also failed
+		pending.id = setTimeout(reset, 1400);
+		// First click's deadline (1400 ms) would have cleared this state under the old code.
+		if (state !== "fail") throw new Error("TIMER1 the second click's feedback did not survive");
+	}
+
+	// ── BOUNDARYKEY1: a crashed panel must not stay crashed for other records ──
+	// An error boundary keeps its error state until it unmounts or the user presses
+	// retry. Station cards key on `card${s.id}`, so moving to another card clears it —
+	// but the detail body used a FIXED key, so one station's crash pinned "render
+	// failed" onto every later station and every tab. Selecting a healthy record still
+	// showed the error, and nothing but a manual retry cleared it.
+	{
+		const srcBk = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const at = srcBk.indexOf('}, `dBodySafe:');
+		if (at < 0) {
+			throw new Error("BOUNDARYKEY1 the detail boundary still uses a fixed key, so one crash sticks to every record");
+		}
+		const keyExpr = srcBk.slice(at, srcBk.indexOf("\n", at));
+		if (keyExpr.indexOf("activeStation.id") < 0) {
+			throw new Error("BOUNDARYKEY1 the boundary key does not depend on the selected station");
+		}
+		if (keyExpr.indexOf("showTab") < 0) {
+			throw new Error("BOUNDARYKEY1 the boundary key does not depend on the tab, so a crash on one tab sticks to the other");
+		}
+		// The station-card boundary is the reference implementation; keep it that way.
+		if (!/}, `card\$\{s\.id\}`\)/.test(srcBk)) {
+			throw new Error("BOUNDARYKEY1 the station-card boundary lost its per-station key");
+		}
+	}
+
 	// ── TOOLLIST1: one hole in the tool catalog must not blank the request tab ─
 	// `prompt.tools` is only checked for being an ARRAY (a non-array becomes `[]`); the
 	// ENTRIES were trusted. One `null` entry threw

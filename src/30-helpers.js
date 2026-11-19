@@ -1986,12 +1986,24 @@ const usedStationIds = new Set();
 					continue;
 				}
 				if (c === "[") {
-					const close = atBracket[i + 1];
+					// `atBracket` yields the next `]` STRICTLY AFTER a position, so asking for
+					// position i+1 skipped a `]` sitting exactly there. An empty label —
+					// `[](https://x)` — is legal Markdown, and missing it did not merely lose
+					// that link: the scanner carried on and the NEXT `[label](href)` paired with
+					// the earlier bracket, so the rendered link read
+					// "](https://x) and [说明" with someone else's href, silently swallowing the
+					// text in between. Check the immediate position first.
+					const close = s[i + 1] === "]" ? i + 1 : atBracket[i + 1];
 					if (close > i && s[close + 1] === "(") {
 						const end = atParen[close + 2];
 						if (end > close) {
 							flush(i);
-							out.push({ t: "link", text: s.slice(i + 1, close), href: s.slice(close + 2, end) });
+							const label = s.slice(i + 1, close);
+							const href = s.slice(close + 2, end);
+							// An empty label would render `<a></a>`: an invisible, unclickable
+							// element that still occupies the link styling. Show the target
+							// instead, so the reader can see where it goes.
+							out.push({ t: "link", text: label !== "" ? label : href, href });
 							i = end + 1; runStart = i; continue;
 						}
 					}
