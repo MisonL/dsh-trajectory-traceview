@@ -1858,6 +1858,42 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── SESSION1: switching conversations must not carry UI state across ──────
+	// The host reuses one component instance when the user opens another
+	// conversation. Every local UI fact survived the switch and was applied to a
+	// different transcript: the replay position (clamped, so a 5-station session opened
+	// fully "replayed" because the previous one was on station 40), the search query,
+	// the selected tab, follow mode.
+	{
+		const srcS = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		// The slot must hand the view an identity to compare against.
+		if (!/sessionKey: String\(sessionId\)/.test(srcS)) {
+			throw new Error("SESSION1 the slot does not pass a session identity, so the view cannot notice a switch");
+		}
+		if (!/function TraceMapView\(\{[^}]*sessionKey/.test(srcS)) {
+			throw new Error("SESSION1 the view does not receive `sessionKey`");
+		}
+		// The reset must actually clear the replay position and the search state.
+		const at = srcS.indexOf("const prev = sessionRef.current;");
+		if (at < 0) throw new Error("SESSION1 the session-change effect is missing");
+		// Bound the slice to THIS effect: a fixed 900-char window ran past it into the
+		// replay engine's own `setRevealed(null)`, so deleting the reset here still
+		// "found" a reset that belonged to unrelated code.
+		const end = srcS.indexOf("}, [sessionKey]);", at);
+		if (end < 0) throw new Error("SESSION1 the session-change effect has no dependency list");
+		const body = srcS.slice(at, end);
+		for (const reset of ["setRevealed(null)", "setQueryRaw(\"\")", "setPlaying(false)", "setTab(\"detail\")"]) {
+			if (body.indexOf(reset) < 0) {
+				throw new Error("SESSION1 switching sessions does not reset " + reset);
+			}
+		}
+		// Guard against a reset that fires on every render: it must be keyed on the
+		// identity and compare against the previous value first.
+		if (body.indexOf("if (prev === sessionKey) return;") < 0) {
+			throw new Error("SESSION1 the reset is unconditional — it would wipe the user's position on every render");
+		}
+	}
+
 	// ── Z1: no const/let may be READ before its declaration (TDZ) ─────────────
 	// 0.9.23 added a selection-pin effect that touched `activeStation` while that
 	// `const` was declared ~20 lines LATER. Const has a temporal dead zone, so every

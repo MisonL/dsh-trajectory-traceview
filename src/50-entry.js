@@ -28,6 +28,12 @@
 					const session = ctx.sessions.binding(sessionId)?.session;
 					if (session === void 0) return {};
 					return {
+						// The view resets its per-session UI state when this changes. Without it,
+						// switching conversations kept the previous one's replay position: the
+						// reveal counter survived, `R` was merely clamped to the new station
+						// count, so opening a fresh 5-station session while sitting on station
+						// 40 of another showed it fully expanded as if already replayed.
+						sessionKey: String(sessionId),
 						loadOlder: async () => {
 							const before = session.getSnapshot();
 							await session.loadOlder();

@@ -180,11 +180,17 @@
 		 *  follow mode, and a bottom panel showing step details incl. the raw request
 		 *  sent to the model. Honors the conversation `inspect` deep-link (chat tool
 		 *  click → locate the station owning that call) and `loadOlder` history. */
-		function TraceMapView({ useSession, useTrajectory, t, viewRequest, completeViewRequest, loadOlder }) {
+		function TraceMapView({ useSession, useTrajectory, t, viewRequest, completeViewRequest, loadOlder, sessionKey }) {
 			const scrollerRef = (0, react.useRef)(null);
 			const minimapRef = (0, react.useRef)(null);
 			const searchRef = (0, react.useRef)(null);
 			const initDone = (0, react.useRef)(false);
+			// Which session this panel is showing. The host reuses one component instance
+			// across conversation switches, so every piece of local UI state below (replay
+			// position, search text, selected tab, follow mode) survived the switch and was
+			// applied to a completely different transcript. `sessionKey` arrives from the
+			// slot's `inject`; when the host does not provide one, behaviour is unchanged.
+			const sessionRef = (0, react.useRef)(sessionKey);
 			// useState order matters (render-repro forces slot 4 = tab): keep these four first.
 			const [revealed, setRevealed] = (0, react.useState)(null); // null = overview (everything shown)
 			const [playing, setPlaying] = (0, react.useState)(false);
@@ -283,6 +289,22 @@
 				}, speedMs);
 				return () => clearInterval(id);
 			}, [playing, speedMs, N]);
+
+			// Reset per-session UI state when the conversation changes. Runs only on an
+			// actual identity change, so mounting with a key already set is a no-op.
+			(0, react.useEffect)(() => {
+				const prev = sessionRef.current;
+				sessionRef.current = sessionKey;
+				if (prev === void 0 || sessionKey === void 0) return;
+				if (prev === sessionKey) return;
+				setPlaying(false);
+				setFollow(true);
+				setRevealed(null);      // overview: show the whole new transcript
+				setQueryRaw("");
+				setMatchPtr(0);
+				setPanelFull(false);
+				setTab("detail");
+			}, [sessionKey]);
 
 			// Stop at the end.
 			(0, react.useEffect)(() => {
