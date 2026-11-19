@@ -1846,8 +1846,24 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const visual = (src.match(/children: anchorNote/g) || []).length
 			- (src.match(/"aria-live": "polite"[^}]*children: anchorNote/g) || []).length;
 		if (visual !== 1) throw new Error("N2 anchorNote must render visually exactly once, found " + visual);
-		if ((src.match(/aria-live/g) || []).length > 2) throw new Error("N2 too many live regions");
+		// Live regions are expensive: each one can talk over the others, so the count is
+		// capped. Three are deliberate and mutually distinct — the hidden anchor-note
+		// region, the initial-load skeleton, and the in-panel search result count. The
+		// search count had NONE, which meant typing in the box produced no announcement
+		// at all; raising the cap is the honest fix (a silent search is worse than three
+		// separate status sources). Anything beyond three still fails.
+		if ((src.match(/aria-live/g) || []).length > 3) throw new Error("N2 too many live regions");
 		if (!/className: "dstv_chip warn", title: anchorNote, children: anchorNote/.test(src)) throw new Error("N2 the single note belongs in the header, with a title");
+		// The search result count is dynamic feedback: without a live region a screen
+		// reader user types a query and hears nothing, including "no matches". Assert the
+		// element itself carries the attributes — a global count cannot prove that.
+		// The first match is the CSS rule in the style block; the JSX element is the one
+		// that must carry the attributes.
+		const sCntAt = src.indexOf("className: `dstv_searchCount");
+		if (sCntAt < 0) throw new Error("N2 the search count element is missing");
+		const sCntBlock = src.slice(sCntAt, sCntAt + 600);
+		if (!sCntBlock.includes('"aria-live": "polite"')) throw new Error("N2 the search result count is not announced (no live region on .dstv_searchCount)");
+		if (!sCntBlock.includes('role: "status"')) throw new Error("N2 the search result count has no status role");
 		// Same rule for the incompatibility/drift notes: a duplicated status line is noise.
 		const warns = (src.match(/anchorNote !== null \?/g) || []).length;
 		if (warns !== 1) throw new Error("N2 anchorNote must have a single render branch, found " + warns);

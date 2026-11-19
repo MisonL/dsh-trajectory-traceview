@@ -920,7 +920,17 @@
 								onChange: (ev) => setQueryRaw(ev.target != null ? ev.target.value : ""),
 								onKeyDown: onSearchKey
 							}, "sIn"),
-							searching ? jsx("span", { className: `dstv_searchCount${matches.length === 0 ? " none" : ""}`, children: matches.length === 0 ? t("search.none") : `${Math.min(matchPtr + 1, matches.length)}/${matches.length} ${t("search.matches")}` }, "sCnt") : null,
+							// Announced: this text changes on every keystroke and after every
+							// next/prev jump, and it is the ONLY feedback that a search found
+							// nothing or moved to the third of five matches. Without a live
+							// region a screen reader user typed into the box and heard nothing.
+							searching ? jsx("span", {
+								className: `dstv_searchCount${matches.length === 0 ? " none" : ""}`,
+								role: "status",
+								"aria-live": "polite",
+								"aria-atomic": "true",
+								children: matches.length === 0 ? t("search.none") : `${Math.min(matchPtr + 1, matches.length)}/${matches.length} ${t("search.matches")}`
+							}, "sCnt") : null,
 							searching && scopeNote !== null ? jsx("button", {
 								type: "button",
 								className: "dstv_scope",
