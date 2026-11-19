@@ -982,6 +982,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── PREFIX1: prepending history must not renumber what is already on screen ──
+	// `stepNo` is a window-wide counter, so paging older history used to renumber every
+	// newer step: turn 5's first step read "步骤 1" and then "步骤 5" once turns 1-4
+	// loaded. Any field the user sees must be derived from per-turn data instead.
+	{
+		const ALL = []; let s0 = 1;
+		for (let turn = 1; turn <= 6; turn += 1) {
+			ALL.push({ kind: "user", seq: s0++, time: 1000 + s0, turn, content: [{ type: "text", text: "q" }] });
+			ALL.push({ kind: "assistant", seq: s0++, time: 1000 + s0, turn, step: 1, messageId: "m" + turn, blocks: [{ kind: "text", text: "a" }] });
+		}
+		const foldP = (n) => deriveTraceTree({ eventNodes: n, requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const before = foldP(ALL.slice(8)); // only turns 5-6 loaded
+		const after = foldP(ALL);           // turns 1-4 prepended
+		const sBefore = before.stations.find((x) => x.turn === 5 && x.kind === "step");
+		const sAfter = after.stations.find((x) => x.turn === 5 && x.kind === "step");
+		if (sBefore === void 0 || sAfter === void 0) throw new Error("PREFIX1 fixture did not produce turn 5");
+		for (const key of ["id", "turnStep", "label", "detail", "anchorKey"]) {
+			if (JSON.stringify(sBefore[key]) !== JSON.stringify(sAfter[key])) {
+				throw new Error("PREFIX1 `" + key + "` changed when older history was prepended: " + JSON.stringify(sBefore[key]) + " -> " + JSON.stringify(sAfter[key]));
+			}
+		}
+		// The display label must be the per-turn number, not the running counter.
+		if (String(sAfter.label).includes(" " + String(sAfter.stepNo) + "") && sAfter.stepNo !== sAfter.turnStep) {
+			throw new Error("PREFIX1 the label still uses the window-wide stepNo");
+		}
+	}
+
 	// ── ANCHOR3: every anchor we hand out must resolve back to its own station ──
 	// `anchorOf` wrote the WINDOW-wide `stepNo`, but `p<turn>s<step>` is RESOLVED
 	// against the per-turn `turnStep`. On a synthetic step (the live/streaming one has

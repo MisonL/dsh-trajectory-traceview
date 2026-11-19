@@ -1253,7 +1253,11 @@
 													jsxs("span", {
 														className: "dstv_axLabel",
 														children: [
-															s.kind === "step" ? String(s.stepNo) : String(i + 1),
+															// Show the PER-TURN step number, not the window-wide one:
+															// paging older history shifts `stepNo` for every newer station,
+															// so this label used to renumber as you scrolled back
+															// (turn 5's first step read "1" then "5"). `turnStep` is stable.
+															s.kind === "step" ? String(s.turnStep ?? s.stepNo) : String(i + 1),
 															clock !== "" ? jsx("span", { className: "clock", children: ` ${clock}` }, "axClk") : null
 														]
 													}, "axLbl")

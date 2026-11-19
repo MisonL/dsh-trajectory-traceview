@@ -1300,7 +1300,9 @@ const usedStationIds = new Set();
 							anchorKey: anchorSeq !== null ? `e${anchorSeq}` : null,
 							synthetic: anchorSeq === null,
 							turn: e.turn,
-							label: `${t("node.step")} ${stepCounter}`,
+							// Per-turn number: a window-wide counter renumbers every step
+							// whenever older history is prepended.
+							label: `${t("node.step")} ${piece.stepNum}`,
 							detail: `${t("node.turn")} ${String(e.turn)} · ${t("node.step")} ${piece.stepNum}`,
 							meta,
 							cells: st.cells,
