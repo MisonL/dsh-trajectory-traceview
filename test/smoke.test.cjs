@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -979,6 +979,59 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			const walk2 = (l) => { for (const x of l || []) { total += 1; walk2(x.subCalls); } };
 			walk2(cell.subCalls);
 			if (total > 2100) throw new Error("PERF3 the budget must be SHARED across all roots of one tool cell, got " + total + " nodes");
+		}
+	}
+
+	// ── SCALE1: the fold must survive a session large enough to overflow a spread ──
+	// The fold called `Math.max(...turns.map(...))`. Spreading one argument per turn
+	// throws "Maximum call stack size exceeded" once a session is big enough (measured
+	// at ~130k turns / 390k nodes); `RangeError` inside the fold took the whole view
+	// down. Counting turns in a loop has no such ceiling.
+	{
+		const mkTurns = (n) => {
+			const nodes = []; let s0 = 1;
+			for (let i = 1; i <= n; i += 1) {
+				nodes.push({ kind: "user", seq: s0++, time: 1000 + s0, turn: i, content: [{ type: "text", text: "q" + i }] });
+				nodes.push({ kind: "assistant", seq: s0++, time: 1000 + s0, turn: i, step: 1, messageId: "m" + i, blocks: [{ kind: "text", text: "a" }] });
+			}
+			// A trailing unmatched user is what reaches the max-turn computation.
+			nodes.push({ kind: "user", seq: s0++, time: 1000 + s0, content: [{ type: "text", text: "tail" }] });
+			return nodes;
+		};
+		// Source check FIRST: if a spread is back, calling the helper below throws a raw
+		// RangeError and the run dies with a stack trace instead of a readable verdict.
+		// (That is still red, but it hides which guard failed.)
+		const helper = (label, fn) => {
+			try { return { value: fn() }; } catch (e) { return { error: e }; }
+		};
+		// Exercise the helper that replaced the spread: past V8's argument ceiling
+		// (~125k), where `Math.max(...turns.map(...))` throws RangeError.
+		const huge = Array.from({ length: 200000 }, (_, i) => ({ turn: i + 1 }));
+		const bigRes = helper("maxTurnOf", () => maxTurnOf(huge));
+		if (bigRes.error !== void 0) {
+			throw new Error("SCALE1 maxTurnOf threw at 200k turns (a spread into Math.max/min overflows): " + bigRes.error.message);
+		}
+		if (bigRes.value !== 200000) throw new Error("SCALE1 maxTurnOf is wrong at 200k turns: " + bigRes.value);
+		if (maxTurnOf([]) !== 0) throw new Error("SCALE1 maxTurnOf on an empty list must be 0");
+		if (maxTurnOf(null) !== 0) throw new Error("SCALE1 maxTurnOf must tolerate a non-array");
+		// ...and prove the spread really is gone from the source: one occurrence would
+		// reinstate the ceiling no matter how correct the helper is.
+		// Strip comments first: the explanatory note above mentions the old call in
+		// prose, and matching that text made this guard fire on itself.
+		const srcC = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8")
+			.split("\n")
+			.filter((line) => {
+				const s2 = line.trim();
+				return !s2.startsWith("//") && !s2.startsWith("*") && !s2.startsWith("/*");
+			})
+			.join("\n");
+		if (/Math\.(max|min)\(\s*\.\.\./.test(srcC)) {
+			throw new Error("SCALE1 a spread into Math.max/min is back — it overflows the stack on large sessions");
+		}
+		// The fold itself must still place a trailing unmatched user in the NEXT turn.
+		const trBig = deriveTraceTree({ eventNodes: mkTurns(40), requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		if (trBig.children.length !== 41) {
+			throw new Error("SCALE1 expected 41 turns (tail user opens the last), got " + trBig.children.length);
 		}
 	}
 
