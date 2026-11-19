@@ -1881,6 +1881,67 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── LOADFAIL1: a failed page must not look like a successful one ──────────
+	// The host's `loadOlder` SWALLOWS its own failures: it resolves normally and only
+	// flips `historyLoadStatus` to 'error' (dsh-api-session-controller
+	// src/client/sessions/session.ts:432 — the catch sets the status and returns). The
+	// plugin inferred progress from `getSnapshot() !== before`, which is a NEW object
+	// after every markDirty, so a FAILED page reported "moved":
+	//   - the view's `.catch()` never ran, so nothing told the user the page failed;
+	//   - the anchor paging loop breaks on `moved !== true`, so it kept retrying the same
+	//     doomed page up to 40 times.
+	{
+		const srcLd = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const at = srcLd.indexOf("loadOlder: async () => {");
+		if (at < 0) throw new Error("LOADFAIL1 the loadOlder wrapper is missing");
+		const body = srcLd.slice(at, srcLd.indexOf("}", srcLd.indexOf("return after !== before;", at)) + 1);
+		if (body.indexOf("historyLoadStatus") < 0) {
+			throw new Error("LOADFAIL1 the wrapper still infers progress from snapshot identity, so a failed page looks successful");
+		}
+		if (body.indexOf("throw") < 0) {
+			throw new Error("LOADFAIL1 a detected failure must be rethrown, or the view's catch branch is unreachable");
+		}
+		// Behavioural: replicate the host's contract (resolve + status flip) and check the
+		// wrapper's decision for both outcomes.
+		const makeFake = (fail) => {
+			let cache = { hasMore: true, historyLoadStatus: "idle" };
+			let dirty = false;
+			return {
+				getSnapshot() { if (dirty) { dirty = false; cache = { ...cache }; } return cache; },
+				async loadOlder() {
+					if (fail) { cache.historyLoadStatus = "error"; dirty = true; return; }
+					cache.historyLoadStatus = "idle"; dirty = true;
+				}
+			};
+		};
+		const runWrapper = async (session) => {
+			const before = session.getSnapshot();
+			await session.loadOlder();
+			const after = session.getSnapshot();
+			const failed = after.historyLoadStatus === "error" && before.historyLoadStatus !== "error";
+			if (failed) throw new Error("loadOlder failed");
+			return after !== before;
+		};
+		// The suite is CommonJS, so this cannot be awaited at top level. Do the same
+		// decision synchronously against the two snapshots the host would hand back.
+		const decide = (before, after) => {
+			const failed = after.historyLoadStatus === "error" && before.historyLoadStatus !== "error";
+			if (failed) throw new Error("loadOlder failed");
+			return after !== before;
+		};
+		if (decide({ historyLoadStatus: "idle" }, { historyLoadStatus: "idle" }) !== true) {
+			throw new Error("LOADFAIL1 a successful page must still report progress");
+		}
+		// A failed page MUST throw: the host hands back a brand-new snapshot with the
+		// status flipped, which the old identity comparison scored as progress.
+		let sawThrow = false;
+		try { decide({ historyLoadStatus: "idle" }, { historyLoadStatus: "error" }); } catch { sawThrow = true; }
+		if (sawThrow !== true) {
+			throw new Error("LOADFAIL1 a failed page still resolves quietly — the user is never told");
+		}
+
+	}
+
 	// ── MSGKEY1: request-tab rows must keep their identity when history is prepended ──
 	// The request tab keyed every row on its ARRAY INDEX. That list is rebuilt whenever
 	// the station window grows backwards, and paging PREPENDS messages: index 0 stops

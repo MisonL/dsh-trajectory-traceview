@@ -34,10 +34,24 @@
 						// count, so opening a fresh 5-station session while sitting on station
 						// 40 of another showed it fully expanded as if already replayed.
 						sessionKey: String(sessionId),
+						// "Did the window grow?" cannot be answered by comparing snapshots.
+						// The host's loadOlder SWALLOWS its own failures: it resolves normally
+						// and only flips `historyLoadStatus` to 'error' (verified in
+						// dsh-api-session-controller/src/client/sessions/session.ts:432). So a
+						// failed page still returns a NEW snapshot object and this comparison
+						// reported "progress":
+						//   - the view's `.catch()` never fired, so a failed page showed no
+						//     message at all — the button spun and came back unchanged;
+						//   - the anchor paging loop treats `moved !== true` as "no progress"
+						//     and breaks, so a failing page kept it retrying up to 40 times.
+						// Read the host status instead, and rethrow so callers can report it.
 						loadOlder: async () => {
 							const before = session.getSnapshot();
 							await session.loadOlder();
-							return session.getSnapshot() !== before;
+							const after = session.getSnapshot();
+							const failed = after.historyLoadStatus === "error" && before.historyLoadStatus !== "error";
+							if (failed) throw new Error("loadOlder failed");
+							return after !== before;
 						}
 					};
 				}
