@@ -2186,10 +2186,20 @@
 					if (st.summary !== "") { L.push(""); L.push(st.summary); }
 					if (st.crequest?.outputText) { L.push(""); L.push(`<details><summary>${t("detail.compactionOutput")}</summary>`); L.push(""); L.push(st.crequest.outputText); L.push("</details>"); }
 				} else if (st.kind === "error") {
-					L.push(`### ✗ ${st.label}`);
+					L.push(`### ✗ ${st.label}${st.code != null ? ` \`${st.code}\`` : ""}`);
 					L.push(""); L.push(st.message || "…");
 				} else if (st.kind === "retry") {
-					L.push(`### ↻ ${st.label}${Number.isFinite(st.retry) ? ` #${st.retry}` : ""}`);
+					// The detail panel shows the retry counter, the provider and the error
+					// code; the export showed none of them, so the Markdown copy of a failed
+					// step was strictly less useful than the screen it was copied from —
+					// "which retry failed, and with what code" is exactly what a reader
+					// pastes into a bug report.
+					const retryBits = [];
+					if (Number.isFinite(st.retry)) retryBits.push(`#${st.retry}${st.maxRetries != null ? `/${st.maxRetries}` : ""}`);
+					if (st.provider) retryBits.push(String(st.provider));
+					if (st.code != null) retryBits.push(`code: ${st.code}`);
+					if (st.retryState) retryBits.push(String(st.retryState));
+					L.push(`### ↻ ${st.label}${retryBits.length > 0 ? ` (${retryBits.join(" · ")})` : ""}`);
 					if (st.message) { L.push(""); L.push(st.message); }
 				} else if (st.kind === "maxTokens") {
 					L.push(`### ⛔ ${st.label}`);

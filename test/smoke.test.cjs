@@ -1881,6 +1881,32 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── EXPORTCODE1: the Markdown export must carry what the panel shows ───────
+	// The detail panel renders an error's `code` and a retry's counter / provider /
+	// state; the export showed only the message. So copying a failed step produced a
+	// strictly LESS useful text than the screen it came from — and "which retry failed,
+	// with what code" is precisely what a reader pastes into a bug report.
+	{
+		const expNodes = [
+			{ kind: "assistant", seq: 4, time: 1e12, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "text", text: "A" }] },
+			{ kind: "turn-error", seq: 6, time: 1e12, turn: 1, message: "EXPERR", code: "EXPCODE1" },
+			{ kind: "model-retry", seq: 8, time: 1e12, turn: 1, failure: { message: "EXPRETRY", code: "EXPCODE2" }, retry: 2, maxRetries: 5, provider: "EXPPROV", retryState: "EXPSTATE" }
+		];
+		const expTree = deriveTraceTree({ eventNodes: expNodes, requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const expMd = buildTraceMarkdown(expTree, t);
+		for (const mark of ["EXPCODE1", "EXPCODE2", "EXPPROV", "EXPSTATE"]) {
+			if (expMd.indexOf(mark) < 0) {
+				throw new Error("EXPORTCODE1 the export drops " + mark + ", which the detail panel shows");
+			}
+		}
+		// The counter must survive too — "#2/5" is the whole point of a retry record.
+		if (expMd.indexOf("#2/5") < 0) throw new Error("EXPORTCODE1 the retry counter is lost in the export");
+		// A plain message must still be there: this is additive, not a replacement.
+		if (expMd.indexOf("EXPRETRY") < 0 || expMd.indexOf("EXPERR") < 0) {
+			throw new Error("EXPORTCODE1 the export lost the error message text");
+		}
+	}
+
 	// ── HINT1: the keyboard hint must name the keys that are actually bound ────
 	// The header told the user "⇤⇥ 跳轮次", but ⇤/⇥ are the Tab/Shift+Tab glyphs printed
 	// on the keycaps; the binding is PageUp/PageDown. A user following the hint pressed
