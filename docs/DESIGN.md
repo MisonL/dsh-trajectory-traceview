@@ -3938,3 +3938,65 @@ effect 的 cleanup 只是把 `cancelled = true`，**并不能停止已经在跑�
 - **`prompt.indexOf` 之类的顺序状态**：`lastPrompt` 继承依赖窗口，裁剪请求后 turn 2 继承不到 turn 1 的 prompt。但宿主分页时 `requests` 和 `eventNodes` 是一起裁的，**实际影响是"窗口外的东西看不到"，符合预期**。
 - **重试的 token 只算最后一次**：同一 step 两次 `requests` 只有一条进 stats。这是"一次步骤一行"的设计，重试的中间消耗在请求详情里仍然可见。
 - **用户输入里的 `<img onerror>` 原样保留在导出里**：导出是 Markdown 文件，不是 HTML 页面；如果强行转义所有 HTML，正常引用 HTML 的对话就没法看了。这与"导出要忠实"冲突，保留原样。
+
+### 12.73 又一批真实缺陷（2026-11-19，第二轮深挖）
+
+不是"再看看有没有问题"，而是逐条构造能失败的输入。**下面每一条都先写失败用例，再改代码。**
+
+#### 已修（每条都有守卫 + 变异验证）
+
+**1. 面板吞掉浏览器快捷键**（`KEY1`）
+
+面板根 `tabIndex: 0`，站点行是 `<button>`。用户只要点进来一次，键盘事件就先到这里：
+
+| 按键 | 应该发生 | 实际发生 |
+|---|---|---|
+| Ctrl/Cmd+R | 刷新页面 | **切换到 request 标签** |
+| Ctrl/Cmd+F | 浏览器查找 | **聚焦内部搜索框** |
+| Alt+← | 后退 | **上一步** |
+| Ctrl+Home | 滚到顶 | **跳到第一个站点** |
+
+两处处理器（面板级 + 站点级）都加了修饰键早退。站点级的那个还会 `stopPropagation`，所以面板级守卫救不了它，必须单独加。
+
+**2. 同一个 `callId` 出现在两个 turn 时，结果被换掉或丢掉**（`CALLID1`）
+
+合并/重放过的日志会有重复 callId。两个独立的 bug 叠在一起：
+
+- `resultsById` 是 `Map<callId, result>`，**只保留最后一个** → turn 1 的调用显示 turn 2 的输出（显示错误数据）
+- `attachedCallIds` 按裸 id 去重 → turn 2 的调用**整个被丢弃**，它的结果变成一条假 orphan（丢失数据）
+
+改成：每个 id 保留按 seq 排序的结果列表，`takeResult()` 取下一个未被消费的；去重键改成 `${turn}:${callId}`。
+
+修后实测：turn 1 → `结果1`，turn 2 → `结果2`，orphan 0 条。
+
+**3. 错误卡片的「复制锚点」粘回去跳到别的记录**（`ANCHOR4`）
+
+`e<seq>` 标识的是 **seq**，不是记录。`turn-error` 被打上"轮次结束 seq"，可以和 assistant 的 seq 相同：
+
+```
+e2 (error) 锚点=tvp1:e2 -> 解析到 s2   ❌ 复制 A 粘到 B
+s2 (step)  锚点=tvp1:e2 -> 解析到 s2   ✓
+```
+
+解析器故意优先 step（锚点通常从步骤复制），所以错误卡片给出的锚点必然跳走。新增 `anchorResolvesToSelf()`，**不提供指向不了自己的锚点**。
+
+**4. 搜索命中数没有 live region**（并入 `N2`）
+
+搜索框旁边的 `1/5 匹配` / `无匹配` 是**唯一**的搜索反馈，但没有 live region——读屏用户输入查询后**什么都听不到**，包括"无匹配"。加 `role=status` + `aria-live=polite`，并把 N2 的全局上限从 2 提到 3（三个 live region 各自独立：锚点提示、加载骨架、搜索计数）。
+
+#### 查过、确认无问题
+
+| 检查 | 结果 |
+|---|---|
+| `safeHref` 19 种绕过尝试（大小写、`\n`、`\t`、`\0`、`data:`、`vbscript:`、`//evil`、`\javascript:`） | 全部正确拦截/放行 |
+| `mdBlocks` 3/4/5 反引号围栏 | 全部正确解析（4 反引号内含 3 反引号也正确） |
+| `matchStations` 复杂度（3000 站点，Proxy 计数下标访问） | **3000 次**，正好线性，无重复扫描 |
+| 无 `innerHTML` / `dangerouslySetInnerHTML` | 0 处（模型输出不可能变成 markup） |
+| `prefers-reduced-motion` | 已覆盖所有动画 |
+| 巨型输入（2 MB 单行） | 折叠 3 ms / 导出 7 ms |
+| 重复 seq 的 id 唯一性 | `u7` / `u7-2` / `s7`，无碰撞 |
+
+#### 判断为"不是缺陷"
+
+- **`forced-colors` 高对比度模式没写**：渐变文字（`background-clip:text; color:transparent`）在该模式下会退化成透明。这是**已知取舍**——补它会让标题和 KPI 数字失去品牌渐变，而高对比度用户本来就看到系统强制配色。真要修得上 `@media (forced-colors: active)` 把 `color:transparent` 覆盖成 `CanvasText`，这轮没做，记录在此。
+- **`lastPrompt` 继承依赖窗口**、**重试 token 只算最后一次**、**用户输入的 `<img onerror>` 原样保留**：见 §12.72。
