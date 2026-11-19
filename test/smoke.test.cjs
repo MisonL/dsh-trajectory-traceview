@@ -1858,6 +1858,46 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── COPY1: a failed copy must be visible, and must not crash ──────────────
+	// Two separate defects, both invisible to a server-render test:
+	//   - `copyText` failures returned silently, so a click looked ignored and the user
+	//     pasted whatever was in the clipboard from before (`navigator.clipboard` is
+	//     absent on plain http://, and `execCommand` can refuse);
+	//   - the failure text called `t(...)` inside the module-level `CopyBtn` component,
+	//     where `t` is NOT in scope. That is a ReferenceError raised only when a copy
+	//     actually fails — unreachable from SSR and from every existing test.
+	{
+		const srcCp = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const btnAt = srcCp.indexOf("function CopyBtn({");
+		if (btnAt < 0) throw new Error("COPY1 CopyBtn is missing");
+		// End the slice at the NEXT top-level declaration, not at the first "});" —
+		// that one lands inside `doCopy`'s setTimeout, so the assertion silently only
+		// inspected the first half of the component (the render branch with the `t(...)`
+		// call was outside the window and a mutation there went unnoticed).
+		const nextDecl = srcCp.indexOf("\n\t\tfunction ", btnAt + 10);
+		const nextHook = srcCp.indexOf("\n\t\t/**", btnAt + 10);
+		const candidates = [nextDecl, nextHook].filter((x) => x > btnAt);
+		const btnEnd = candidates.length > 0 ? Math.min(...candidates) : btnAt + 2000;
+		const btn = srcCp.slice(btnAt, btnEnd);
+		if (/\bt\(/.test(btn.replace(/\/\/.*$/gm, ""))) {
+			throw new Error("COPY1 CopyBtn uses `t` directly, but it is a module-level component with no such binding");
+		}
+		if (!/failLabel/.test(btn)) throw new Error("COPY1 CopyBtn cannot render a failure state");
+		if (!/copyState/.test(btn)) throw new Error("COPY1 CopyBtn lost its three-state feedback");
+		// Every call site must supply the failure text, or the button shows a bare "!".
+		// Split on the call marker and look inside each fragment up to the next one:
+		// the call props span one line but contain nested `t(...)`, so a `[^)]*` scan
+		// stopped at the first closing paren and matched nothing at all.
+		const frags = srcCp.split("jsx(CopyBtn,").slice(1);
+		const missing = frags.filter((f) => f.slice(0, 400).indexOf("failLabel:") < 0);
+		if (missing.length > 0) {
+			throw new Error("COPY1 " + missing.length + " of " + frags.length + " CopyBtn call sites do not pass failLabel");
+		}
+		if (srcCp.indexOf("setCopyState(ok ? \"ok\" : \"fail\")") < 0) {
+			throw new Error("COPY1 a failed copy is still silent");
+		}
+	}
+
 	// ── SESSION1: switching conversations must not carry UI state across ──────
 	// The host reuses one component instance when the user opens another
 	// conversation. Every local UI fact survived the switch and was applied to a

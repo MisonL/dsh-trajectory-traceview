@@ -128,21 +128,29 @@
 			return jsx("div", { className: "dstv_md", children: nodes }, "mdRoot");
 		}
 		/** Small inline copy button with transient feedback. */
-		function CopyBtn({ text, label, okLabel }) {
-			const [copied, setCopied] = (0, react.useState)(false);
+		function CopyBtn({ text, label, okLabel, failLabel }) {
+			// Three states, not two. A failed copy used to return silently: the button
+			// never changed, so the click looked ignored and the user pasted whatever was
+			// in the clipboard from before. `navigator.clipboard` is unavailable on plain
+			// http:// (non-secure context) and `execCommand` can refuse too, so failure is
+			// a normal outcome that has to be visible.
+			const [copyState, setCopyState] = (0, react.useState)("idle");
 			const doCopy = () => {
 				copyText(text, (ok) => {
-					if (!ok) return;
-					setCopied(true);
-					setTimeout(() => setCopied(false), 1400);
+					setCopyState(ok ? "ok" : "fail");
+					setTimeout(() => setCopyState("idle"), 1400);
 				});
 			};
 			return jsx("button", {
 				type: "button",
 				className: "dstv_copyBtn",
-				"data-ok": copied ? "true" : undefined,
+				"data-ok": copyState === "ok" ? "true" : undefined,
+				"data-fail": copyState === "fail" ? "true" : undefined,
 				onClick: (ev) => { ev.stopPropagation(); doCopy(); },
-				children: copied ? `✓ ${okLabel}` : label
+				// `failLabel` arrives as a prop: this is a module-level component and `t`
+				// is NOT in its scope — calling it here threw ReferenceError, but only
+				// when a copy actually failed, which no test could reach.
+				children: copyState === "ok" ? `✓ ${okLabel}` : copyState === "fail" ? `✗ ${failLabel ?? "!"}` : label
 			});
 		}
 
@@ -1460,7 +1468,7 @@
 									jsx("div", { className: "inner", children: [
 										jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }, children: [
 											jsx("span", { className: "dstv_dLabel", style: { margin: 0 }, children: t("node.tool") }, "tArgLbl"),
-											jsx(CopyBtn, { text: cell.args, label: t("detail.copy"), okLabel: t("detail.copied") }, "tArgCopy")
+											jsx(CopyBtn, { text: cell.args, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "tArgCopy")
 										] }, "tArgHead"),
 										jsx("div", { className: "dstv_code", children: pretty !== "" ? pretty : t("detail.noArgs") }, "tArgCode")
 									] }, "tArgInner")
@@ -1470,7 +1478,7 @@
 									jsx("div", { className: "inner", children: [
 										jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }, children: [
 											jsx("span", { className: `dstv_dLabel${cell.isError ? " err" : ""}`, style: { margin: 0 }, children: cell.isError && cell.errorName != null ? `✗ ${cell.errorName}` : t("detail.result") }, "tResLbl"),
-											jsx(CopyBtn, { text: cell.resultText, label: t("detail.copy"), okLabel: t("detail.copied") }, "tResCopy")
+											jsx(CopyBtn, { text: cell.resultText, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "tResCopy")
 										] }, "tResHead"),
 										jsx("div", { className: "dstv_code", children: cell.resultText !== "" ? cell.resultText : t("detail.noResult") }, "tResCode")
 									] }, "tResInner")
@@ -1504,7 +1512,7 @@
 													sub.resultText !== "" ? jsxs("details", { className: "dstv_det", open: sub.isError, children: [
 														jsx("summary", { children: [sub.isError ? `✗ ${t("detail.result")}` : `✓ ${t("detail.result")}`, jsx("span", { className: "sub", children: String(sub.resultText.length) }, "sRLen")] }, "sResSum"),
 														jsx("div", { className: "inner", children: jsxs("div", { children: [
-															jsx(CopyBtn, { text: sub.resultText, label: t("detail.copy"), okLabel: t("detail.copied") }, "sResCopy"),
+															jsx(CopyBtn, { text: sub.resultText, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "sResCopy"),
 															jsx("div", { className: "dstv_code", style: { marginTop: 4 }, children: sub.resultText }, "sResCode")
 														] }) }, "sResInner")
 													] }, "sRes") : null
@@ -1593,7 +1601,7 @@
 							jsx("span", { children: `📤 ${t("detail.compactionOutput")}` }, "oHead"),
 							jsx("span", { className: "sub", children: `${fmtInt(cr.outputText.length)} ${t("detail.chars")}` }, "oLen"),
 							jsx("span", { className: "grow" }, "oGrow"),
-							jsx(CopyBtn, { text: cr.outputText, label: t("detail.copy"), okLabel: t("detail.copied") }, "oCopy")
+							jsx(CopyBtn, { text: cr.outputText, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "oCopy")
 						] }, "oSecHead"),
 						jsx("div", { className: "dstv_code", style: { maxHeight: 260 }, children: cr.outputText }, "oCode")
 					] }, "crOut") : null
@@ -1680,7 +1688,7 @@
 							jsx("span", { children: `🧠 ${t("detail.systemPrompt")}` }, "spHead"),
 							jsx("span", { className: "sub", children: `${fmtInt(req.prompt.systemChars)} ${t("detail.chars")}` }, "spLen"),
 							jsx("span", { className: "grow" }, "spGrow"),
-							jsx(CopyBtn, { text: sysJson, label: t("detail.copy"), okLabel: t("detail.copied") }, "spCopy")
+							jsx(CopyBtn, { text: sysJson, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "spCopy")
 						] }, "spSecHead"),
 						jsxs("details", { className: "dstv_det", open: false, children: [
 							jsx("summary", { children: [t("detail.systemPrompt")] }, "spSum"),
@@ -1693,7 +1701,7 @@
 							jsx("span", { children: `🛠 ${t("detail.toolsCatalog")}` }, "tcHead"),
 							jsx("span", { className: "sub", children: `${tools.length} ${t("detail.toolCount")}` }, "tcLen"),
 							jsx("span", { className: "grow" }, "tcGrow"),
-							jsx(CopyBtn, { text: JSON.stringify(tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })), null, 2), label: t("detail.copy"), okLabel: t("detail.copied") }, "tcCopy")
+							jsx(CopyBtn, { text: JSON.stringify(tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })), null, 2), label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "tcCopy")
 						] }, "tcSecHead"),
 						jsxs("details", { className: "dstv_det", open: false, children: [
 							jsx("summary", { children: [`${t("detail.toolsCatalog")} (${tools.length})`] }, "tcSum"),
@@ -1721,7 +1729,7 @@
 							jsx("span", { children: `💬 ${t("detail.messages")}` }, "mHead"),
 							jsx("span", { className: "sub", children: `${messages.length} ${t("detail.msgCount")}` }, "mLen"),
 							jsx("span", { className: "grow" }, "mGrow"),
-							jsx(CopyBtn, { text: payloadJson, label: t("detail.copy"), okLabel: t("detail.copied") }, "mCopy")
+							jsx(CopyBtn, { text: payloadJson, label: t("detail.copy"), okLabel: t("detail.copied"), failLabel: t("anchor.copyFailed") }, "mCopy")
 						] }, "mSecHead"),
 						jsxs("span", { className: "dstv_dLabel sec", children: [
 							t("detail.requestApprox"),
@@ -1796,7 +1804,7 @@
 								// the step, so this button used to copy an identity that jumped
 								// to a different record when pasted.
 								if (!anchorResolvesToSelf(activeStation, stations)) return null;
-								return jsx("span", { className: "dstv_anchorWrap", title: av, children: jsx(CopyBtn, { text: av, label: `🔗 ${t("anchor.copy")}`, okLabel: t("anchor.copied") }, "dAnchor") }, "dAnchorWrap");
+								return jsx("span", { className: "dstv_anchorWrap", title: av, children: jsx(CopyBtn, { text: av, label: `🔗 ${t("anchor.copy")}`, okLabel: t("anchor.copied"), failLabel: t("anchor.copyFailed") }, "dAnchor") }, "dAnchorWrap");
 							})(),
 							activeStation.synthetic === true ? jsx("span", { className: "dstv_chip warn", children: t("anchor.notPersisted") }, "dSynth") : null,
 								// Shown once, in the header: the same note used to render here as well, so
@@ -1805,7 +1813,8 @@
 							jsx(CopyBtn, {
 								text: stepMarkdown,
 								label: `📋 ${t("action.exportStep")}`,
-								okLabel: t("anchor.copied")
+								okLabel: t("anchor.copied"),
+								failLabel: t("anchor.copyFailed")
 							}, "dExportStep"),
 							jsx("button", { type: "button", className: "dstv_btn dstv_panelToggle", title: panelFull ? t("action.collapsePanel") : t("action.expandPanel"), onClick: () => setPanelFull((v) => !v), children: panelFull ? "⤡" : "⤢" }, "dToggle")
 						]
