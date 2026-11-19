@@ -1348,6 +1348,15 @@
 						"data-active": revealed !== null && i === R - 1 ? "true" : undefined,
 						"data-live": s.kind === "step" && s.live === true ? "true" : undefined,
 						"data-match": matched ? "true" : undefined,
+						// Roving tabindex, same as the station list. This strip is a SECOND
+						// navigation affordance for the SAME stations: leaving every tick
+						// tabbable made it N extra Tab stops (measured 200 at 200 stations,
+						// so 3,600 on a long session) that a keyboard user had to cross to
+						// reach the panel below — for a control that only seeks.
+						// ...but exactly one tick must stay reachable, or the whole strip
+						// disappears from the keyboard in the overview state. Same rule as
+						// the station list: the active one, else the first.
+						tabIndex: (revealed !== null && i === R - 1) || (revealed === null && i === 0) ? 0 : -1,
 						// `s.label` is undefined for user stations, so the tooltip read
 						// "undefined · 6:13:20 AM" and the button had no accessible name at
 						// all. Fall back to the kind and always expose aria-label.
@@ -1887,7 +1896,12 @@
 						// `aria-pressed` tells a screen reader which view is active without
 						// claiming a role the markup cannot honour.
 						jsx("button", { type: "button", className: "dstv_tab", "data-on": showTab === "detail" ? "true" : undefined, "aria-pressed": showTab === "detail" ? "true" : "false", onClick: () => setTab("detail"), children: `🧭 ${t("tab.detail")}` }, "tabDetail"),
-						jsx("button", { type: "button", className: "dstv_tab", "data-on": showTab === "request" ? "true" : undefined, "aria-pressed": showTab === "request" ? "true" : "false", onClick: () => setTab("request"), children: `📨 ${t("tab.request")}` }, "tabRequest")
+						// Only latch the request tab when there IS a request to show. `showTab`
+						// already falls back to the detail view, so the button looked inert — but
+						// the state stayed "request", and the moment the reader stepped to a
+						// station that DOES have a request the panel jumped to it without anyone
+						// pressing anything. `r` has this guard; the button did not.
+						jsx("button", { type: "button", className: "dstv_tab", "data-on": showTab === "request" ? "true" : undefined, "aria-pressed": showTab === "request" ? "true" : "false", onClick: () => { if (canRequest) setTab("request"); }, children: `📨 ${t("tab.request")}` }, "tabRequest")
 					] }, "dTabs") : null,
 					jsxs("div", {
 						className: "dstv_dHead",

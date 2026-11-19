@@ -1881,6 +1881,89 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── MINITAB1: the minimap must not be 200 extra Tab stops ─────────────────
+	// The minimap is a SECOND navigation affordance for the SAME stations the timeline
+	// already exposes, but every tick was a plain <button>. Measured on a rendered view:
+	// 200 stations produced 215 tabbable elements, 200 of them minimap ticks — on a long
+	// session that is ~3,600 stops a keyboard user has to cross to reach the panel below.
+	// The station list already uses a roving tabindex; the strip must match it.
+	{
+		let ReactMi = null;
+		let rtMi = null;
+		try { ReactMi = require("react"); rtMi = require("react/jsx-runtime"); } catch { ReactMi = null; }
+		if (ReactMi === null) {
+			console.log("MINITAB1 SKIPPED: react / react/jsx-runtime not installed");
+		} else {
+			const srcMi = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+			const vmMi = require("node:vm");
+			const boxMi = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
+				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
+				react: ReactMi, jsx: rtMi.jsx, jsxs: rtMi.jsx, fragment: rtMi.Fragment,
+				document: void 0, window: void 0, location: void 0 };
+			boxMi.globalThis = boxMi;
+			vmMi.createContext(boxMi);
+			const hMi = srcMi.indexOf("//#region pure helpers: snapshot -> timeline tree");
+			const hEnd = srcMi.indexOf("//#endregion", hMi);
+			const cMi = srcMi.indexOf("//#region horizontal timeline + replay component");
+			const cEnd = srcMi.indexOf("//#endregion", cMi);
+			vmMi.runInContext("const fragment = react.Fragment;\n" + srcMi.slice(hMi, hEnd) + "\n" + srcMi.slice(cMi, cEnd) + ";globalThis.__mi={TraceMapView};", boxMi, { timeout: 60000 });
+			// 40 stations is enough to prove the shape; the count must not scale with N.
+			const miNodes = [];
+			for (let i = 0; i < 20; i += 1) {
+				miNodes.push({ kind: "user", seq: i * 2 + 1, time: i * 1000, turn: i + 1, content: [{ type: "text", text: "u" + i }] });
+				miNodes.push({ kind: "assistant", seq: i * 2 + 2, time: i * 1000 + 1, turn: i + 1, step: 1, messageId: "m" + i, blocks: [{ kind: "text", text: "a" + i }] });
+			}
+			const miSnap = { eventNodes: miNodes, requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+			const miHtml = require("react-dom/server").renderToStaticMarkup(rtMi.jsx(boxMi.__mi.TraceMapView, {
+				useSession: (sel) => { try { return sel({ openState: "open" }); } catch { return void 0; } },
+				useTrajectory: () => miSnap,
+				t: (k) => k,
+				viewRequest: null,
+				completeViewRequest: () => {},
+				loadOlder: async () => false
+			}));
+			const miTicks = [...miHtml.matchAll(/<button[^>]*dstv_miniTick[^>]*>/g)].map((m) => m[0]);
+			if (miTicks.length !== 40) throw new Error("MINITAB1 the fixture rendered " + miTicks.length + " ticks, expected 40");
+			const reachable = miTicks.filter((tk) => tk.indexOf('tabindex="-1"') < 0);
+			// Exactly one, in EVERY state: zero would drop the strip from the keyboard
+			// entirely, which is the opposite failure and equally wrong.
+			if (reachable.length !== 1) {
+				throw new Error("MINITAB1 " + reachable.length + " of " + miTicks.length + " minimap ticks are Tab stops (must be exactly 1)");
+			}
+			// And the rest of the view must not be dragged along: the timeline list uses a
+			// roving tabindex too, so the whole view stays small.
+			const tabbable = [...miHtml.matchAll(/<(button|input|summary|a )([^>]*)>/g)].filter((m) => !/tabindex="-1"/.test(m[2])).length;
+			if (tabbable > 40) {
+				throw new Error("MINITAB1 the view exposes " + tabbable + " Tab stops for 40 stations");
+			}
+		}
+	}
+
+	// ── TABLATCH1: the request tab must not latch onto a station that has no request ──
+	// `showTab` falls back to the detail view when `canRequest` is false, so the button
+	// looked inert — but the STATE was still written. The moment the reader moved to a
+	// station that does have a request, the panel jumped to the request view with nobody
+	// having pressed anything. The `r` shortcut always had this guard; the button did not.
+	{
+		const srcTb = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const btnAt = srcTb.indexOf('"data-on": showTab === "request"');
+		if (btnAt < 0) throw new Error("TABLATCH1 the request tab button is missing");
+		const btn = srcTb.slice(btnAt, srcTb.indexOf('"tabRequest")', btnAt));
+		if (btn.indexOf("if (canRequest) setTab(\"request\")") < 0) {
+			throw new Error("TABLATCH1 the request tab latches even when the station has no request");
+		}
+		// The detail button must stay unconditional: it is always valid.
+		const detAt = srcTb.indexOf('"data-on": showTab === "detail"');
+		const det = srcTb.slice(detAt, srcTb.indexOf('"tabDetail")', detAt));
+		if (det.indexOf('onClick: () => setTab("detail")') < 0) {
+			throw new Error("TABLATCH1 the detail tab must remain reachable unconditionally");
+		}
+		// And the shortcut keeps its own guard, so both paths agree.
+		if (!/if \(can\) \{ setTab\(tab === "request" \? "detail" : "request"\)/.test(srcTb)) {
+			throw new Error("TABLATCH1 the `r` shortcut lost its canRequest guard");
+		}
+	}
+
 	// ── ANCHORTYPE1: typing an anchor must not validate on every keystroke ────
 	// `anchorInput` was part of the token that drives the resolve effect, so each
 	// keystroke ran a full `anchorApply`: typing `tvp1:t2s1` produced eight failed

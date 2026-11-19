@@ -944,8 +944,11 @@
 
 			const turns = [];
 			const turnMap = new Map();
-const usedStationIds = new Set();
-						let pendingUser = [];
+			// Ids double as React keys and as the selection pin's identity, so they must be
+			// unique AND stable across rebuilds. Shared by the user/context stations and the
+			// synthetic steps: both are numbered from data that a malformed log can repeat.
+			const usedStationIds = new Set();
+			let pendingUser = [];
 			let lastTurnEntry = null;
 			const ensureTurn = (turn, seq) => {
 				let e = turnMap.get(turn);
