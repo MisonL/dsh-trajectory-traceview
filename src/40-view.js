@@ -182,6 +182,7 @@
 		 *  click → locate the station owning that call) and `loadOlder` history. */
 		function TraceMapView({ useSession, useTrajectory, t, viewRequest, completeViewRequest, loadOlder }) {
 			const scrollerRef = (0, react.useRef)(null);
+			const minimapRef = (0, react.useRef)(null);
 			const searchRef = (0, react.useRef)(null);
 			const initDone = (0, react.useRef)(false);
 			// useState order matters (render-repro forces slot 4 = tab): keep these four first.
@@ -318,6 +319,32 @@
 				measureHead();
 				window.addEventListener("resize", measureHead);
 				return () => window.removeEventListener("resize", measureHead);
+			}, [revealed, R, N]);
+
+			/**
+			 * Keep the active minimap tick inside the strip.
+			 *
+			 * The strip needs ~5px per station, so a long session cannot fit it (3,600
+			 * stations = ~18,000px). It scrolls instead of dragging the panel sideways —
+			 * but a scrolling strip that never follows the playhead shows only the OLDEST
+			 * stations, so the "where am I" marker is permanently off-screen while the
+			 * user steps forward. Scroll the strip to the active tick, and only the strip:
+			 * `scrollIntoView` on an inner element also moves outer ancestors.
+			 */
+			const revealTick = (idx) => {
+				const mm = minimapRef.current;
+				if (mm === null) return;
+				const el = mm.querySelector(`[data-tick-idx="${String(idx)}"]`);
+				if (el === null) return;
+				if (mm.scrollWidth <= mm.clientWidth + 1) return; // strip fits; nothing to do
+				const want = el.offsetLeft + el.offsetWidth / 2 - mm.clientWidth / 2;
+				const target = Math.max(0, Math.min(mm.scrollWidth - mm.clientWidth, want));
+				if (Math.abs(mm.scrollLeft - target) < 2) return;
+				mm.scrollLeft = target;
+			};
+			(0, react.useEffect)(() => {
+				if (revealed === null) return;
+				revealTick(R - 1);
 			}, [revealed, R, N]);
 
 			const centerStation = (idx) => {
@@ -1181,6 +1208,7 @@
 			};
 			const minimapTicks = jsx("div", {
 				className: "dstv_minimap",
+				ref: minimapRef,
 				children: stations.map((s, i) => {
 					const reached = i < R;
 					let k = s.kind;
@@ -1191,6 +1219,7 @@
 					return jsx("button", {
 						type: "button",
 						className: "dstv_miniTick",
+						"data-tick-idx": String(i),
 						"data-k": k,
 						"data-done": done ? "true" : undefined,
 						"data-dim": reached ? (searching && !matched ? "true" : undefined) : "true",

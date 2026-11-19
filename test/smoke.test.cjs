@@ -1031,6 +1031,17 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const tickAt = css.indexOf(".dstv_miniTick{");
 		const tick = css.slice(tickAt, css.indexOf("}", tickAt) + 1);
 		if (tick.indexOf("min-width:3px") < 0) throw new Error("MINIMAP1 the tick rule changed unexpectedly: " + tick);
+		// A strip that scrolls but never follows the playhead shows only the OLDEST
+		// stations, so the "where am I" marker sits off-screen while the user steps
+		// forward. It must chase the active tick, and only its OWN scrollLeft: an inner
+		// `scrollIntoView` would also move outer ancestors.
+		if (css.indexOf("data-tick-idx") < 0) throw new Error("MINIMAP1 the active tick is not addressable");
+		if (css.indexOf("mm.scrollLeft = target") < 0) {
+			throw new Error("MINIMAP1 the minimap never follows the playhead, so the current position scrolls out of view");
+		}
+		if (/revealTick[\s\S]{0,600}scrollIntoView/.test(css)) {
+			throw new Error("MINIMAP1 the minimap must not use scrollIntoView — it moves outer ancestors too");
+		}
 	}
 
 	// ── BLOCKTXT1: a file result must not render as an empty cell ─────────────
