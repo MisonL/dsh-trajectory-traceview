@@ -19,14 +19,14 @@ if (end === -1) throw new Error("helpers endregion not found");
 let extracted = src.slice(start, end);
 
 extracted += `
-;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf, blocksText });
+;(globalThis.__test = { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, parseAnchor, resolveAnchorInStations, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf, blocksText, asText, safeToolList });
 `;
 
 // WeakSet is a browser global the helper uses for cycle detection; the sandbox
 // has to provide it or the test fails with a ReferenceError instead of a verdict.
 const sandbox = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number };
 vm.runInNewContext(extracted, sandbox, { filename: "traceview-helpers.js", timeout: 10000 });
-const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf, blocksText } = sandbox.__test;
+const { deriveTraceTree, reconstructMessages, matchStations, buildTraceMarkdown, promptDiffOf, subDetailOf, anchorOf, parseAnchor, resolveAnchorInStations, clockGapWidth, searchScopeNote, anchorLoadTarget, nextHashFor, anchorSeqFloor, safeList, promptTextDiff, changedTools, evidenceOf, buildStepMarkdown, snapshotContract, unknownNodeStats, isEverythingUnknown, fmtDur, safeJsonPreview, stationAriaLabel, anchorCoveredByWindow, anchorTurnFloor, fmtTokens, fencedBlock, annotateNamelessFormFields, mdBlocks, mdInline, markdownToPlain, textOfContent, stationHay, createFlightGuard, anchorResolvesToSelf, maxTurnOf, blocksText, asText, safeToolList } = sandbox.__test;
 
 const t = (key) => key; // identity locale for assertions
 
@@ -748,7 +748,12 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (zhS < 0 || enS < 0) throw new Error("I18N locale tables not found");
 		const grab = (block) => new Set([...block.matchAll(/^\s+"([\w.]+)":/gm)].map((m) => m[1]));
 		const zhKeys = grab(src.slice(zhS, enS));
-		const enKeys = grab(src.slice(enS, enS + 20000));
+		// Bound the English side the same way as the Chinese one. `enS + 20000` ran past
+		// the end of the table (8,754 chars) into unrelated code: any `"a.b":` literal
+		// after it would be counted as a key, and a key ADDED at the end would not be.
+		const enEndMark = src.indexOf("\n\t\t};", enS);
+		if (enEndMark < 0) throw new Error("I18N2 could not find the end of the English table");
+		const enKeys = grab(src.slice(enS, enEndMark));
 		const used = new Set([...src.matchAll(/\bt\("([\w.]+)"\)/g)].map((m) => m[1]));
 		const missZh = [...used].filter((k) => !zhKeys.has(k));
 		const missEn = [...used].filter((k) => !enKeys.has(k));
@@ -1708,8 +1713,17 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		const srcS = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
 		const a = srcS.indexOf("function mdInline(src) {");
 		const b = srcS.indexOf("function MarkdownText({ text }) {");
+		const rtS = require("react/jsx-runtime");
 		const box = { React: React2, console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, isFinite, parseInt, parseFloat, Date, RegExp };
-		require("node:vm").runInNewContext("const jsx = React.createElement, jsxs = React.createElement;\n" + srcS.slice(a, b) + ";globalThis.__r = { renderMdInline, mdInline };", box, { timeout: 60000 });
+		require("node:vm").runInNewContext(
+			// `jsx(type, props, key)` takes the key as its THIRD argument. Passing
+			// `React.createElement` here turned every key into a child, so the rendered
+			// text was the key string instead of the label — the href assertions happened
+			// to survive, which is exactly what made it invisible.
+			"const jsx = __jsx, jsxs = __jsxs, key3 = (t, p, k) => __jsx(t, p, k);\n"
+			+ srcS.slice(a, b) + ";globalThis.__r = { renderMdInline, mdInline };",
+			Object.assign(box, { __jsx: rtS.jsx, __jsxs: rtS.jsxs }),
+			{ timeout: 60000 });
 		const render = (md) => renderToStaticMarkup(box.__r.renderMdInline(box.__r.mdInline(md), "k"));
 		const dangerous = [
 			"[evil](javascript:alert(1))",
@@ -1809,14 +1823,17 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			const pathZ = require("node:path");
 			const vmZ = require("node:vm");
 			const srcZ = fsZ.readFileSync(pathZ.join(__dirname, "..", "lib", "client.js"), "utf8");
-			const jsx = (type, props, key) => {
-				const p = props === null || props === void 0 ? {} : Object.assign({}, props);
-				if (key !== void 0 && key !== null) p.key = key;
-				return React.createElement(type, p);
-			};
+			// Use the REAL runtime. A hand-written shim that forwards `key` looks
+			// equivalent, but the first version of this block passed bare
+			// `React.createElement` as `jsx`, so every key landed in `children` and the
+			// component rendered skeleton markup that still contained a view root — a
+			// green test over a blank panel. Assert we are not doing that again.
+			const runtimeZ = require("react/jsx-runtime");
+			const jsx = runtimeZ.jsx;
+			const jsxs = runtimeZ.jsxs;
 			const boxZ = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
 				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
-				react: React, jsx, jsxs: jsx, react_jsx_runtime: { jsx, jsxs: jsx },
+				react: React, jsx, jsxs, fragment: runtimeZ.Fragment, react_jsx_runtime: { jsx, jsxs },
 				document: void 0, window: void 0, location: void 0 };
 			boxZ.globalThis = boxZ;
 			vmZ.createContext(boxZ);
@@ -1854,6 +1871,228 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 					throw new Error("Z2 rendering the " + name + " snapshot threw: " + e.constructor.name + ": " + e.message.slice(0, 140));
 				}
 				if (typeof html !== "string" || !html.includes("dstv_root")) throw new Error("Z2 the " + name + " snapshot rendered no view root");
+				// A shim that drops `key` into `children` still produced a root and passed.
+				// The timeline only exists if station cards do, so require them — an empty
+				// snapshot is the only one allowed to have none.
+				if (name !== "empty" && !html.includes("dstv_station")) {
+					throw new Error("Z2 the " + name + " snapshot produced no station card; the harness rendered a skeleton, not the view (" + (typeof html === "string" ? html.length : 0) + " chars)");
+				}
+			}
+		}
+	}
+
+	// ── ANCHORLIFE1: an anchor search must not outlive the panel ──────────────
+	// Paging for an anchor can run for tens of seconds (up to 40 pages). The loop's
+	// progress test reads `stationsRef`, which FREEZES at its last value once the
+	// component is gone, so the "did the projection change?" check never sees progress,
+	// all 12 back-off tries run per page, and `loadOlder()` keeps reporting growth —
+	// pulling history for a conversation nobody is looking at. Both entry points share
+	// one wrapper, so the liveness check belongs there.
+	{
+		const srcAl = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/const aliveRef = \(0, react\.useRef\)\(true\)/.test(srcAl)) {
+			throw new Error("ANCHORLIFE1 there is no liveness token for the anchor search");
+		}
+		// The unmount cleanup has to actually flip it; a ref that is never cleared is
+		// decoration.
+		if (!/return \(\) => \{ aliveRef\.current = false; \}/.test(srcAl)) {
+			throw new Error("ANCHORLIFE1 the liveness token is never cleared on unmount");
+		}
+		// And the shared wrapper must refuse to start when the panel is gone.
+		const guardAt = srcAl.indexOf("const anchorApplyGuarded = (raw) => {");
+		if (guardAt < 0) throw new Error("ANCHORLIFE1 the shared wrapper is missing");
+		const guardBody = srcAl.slice(guardAt, srcAl.indexOf("react.useEffect", guardAt));
+		if (guardBody.indexOf("aliveRef.current !== true") < 0) {
+			throw new Error("ANCHORLIFE1 the wrapper starts a search even after unmount");
+		}
+		// The paging loop must re-check between awaits, which is where the time goes.
+		const loopAt = srcAl.indexOf("while (resolved.ok !== true && pages < ANCHOR_MAX_PAGES");
+		const loopBody = srcAl.slice(loopAt, srcAl.indexOf("capped = resolved.ok !== true", loopAt));
+		const checks = (loopBody.match(/aliveRef\.current !== true/g) ?? []).length;
+		if (checks < 3) {
+			throw new Error("ANCHORLIFE1 the paging loop re-checks liveness only " + checks + " time(s); it must check after each await");
+		}
+	}
+
+	// ── ANCHORDEDUPE1: a deep-linked anchor must not fight the reader ─────────
+	// The resolve effect depended on `N` as well as the anchor token, so in a live
+	// session EVERY new station re-ran it. A successful landing mirrors the anchor into
+	// the URL, so the token stays non-empty: each arriving station re-applied it,
+	// yanking `revealed` back to the anchor and stopping playback. The reader could not
+	// step away from a deep link at all.
+	{
+		const srcAd = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (!/appliedAnchorRef/.test(srcAd)) throw new Error("ANCHORDEDUPE1 the applied-anchor memo is missing");
+		const eff = srcAd.indexOf("const appliedAnchorRef = (0, react.useRef)(null);");
+		const effEnd = srcAd.indexOf("if (typeof completeViewRequest === \"function\") completeViewRequest();", eff);
+		if (eff < 0 || effEnd < 0) throw new Error("ANCHORDEDUPE1 could not locate the resolve effect");
+		const body = srcAd.slice(eff, effEnd);
+		if (body.indexOf("appliedAnchorRef.current === anchorToken") < 0) {
+			throw new Error("ANCHORDEDUPE1 re-entering the effect with the same token re-applies the anchor");
+		}
+		// `N` must STAY a dependency (a deep link can arrive before any station exists,
+		// and the retry on growth is the only thing that lands it), so the fix is the
+		// memo, not the dependency list. What must not happen is recording the token
+		// before it succeeded — that would turn one failure into "never retried".
+		const depAt = srcAd.indexOf("}, [anchorToken, N]);", effEnd);
+		if (depAt < 0) throw new Error("ANCHORDEDUPE1 the retry-on-growth dependency was removed, so an early deep link can never land");
+		if (body.indexOf("if (ok) appliedAnchorRef.current = anchorToken;") < 0) {
+			throw new Error("ANCHORDEDUPE1 the applied token is recorded before the jump succeeds, so a failed deep link is never retried");
+		}
+	}
+
+	// ── SYNTHID1: a synthetic step's id must survive prepending history ───────
+	// `stepCounter` is a WINDOW-wide running count. The synthetic-step id embedded it,
+	// so loading older history renumbered the id of the very step the reader had
+	// selected; the selection pin's `findIndex` returned -1 and the detail panel
+	// silently showed a DIFFERENT record at the same position.
+	{
+		const early = [];
+		for (let turn = 1; turn <= 5; turn += 1) {
+			early.push({ kind: "user", seq: turn * 10, time: turn * 1000, turn, content: [{ type: "text", text: "u" + turn }] });
+			early.push({ kind: "assistant", seq: turn * 10 + 1, time: turn * 1000 + 1, turn, step: 1, messageId: "m" + turn, blocks: [{ kind: "text", text: "a" + turn }] });
+		}
+		const later = [];
+		for (let turn = 6; turn <= 8; turn += 1) {
+			later.push({ kind: "user", seq: turn * 10, time: turn * 1000, turn, content: [{ type: "text", text: "u" + turn }] });
+			later.push({ kind: "assistant", seq: turn * 10 + 1, time: turn * 1000 + 1, turn, step: 1, messageId: "m" + turn, blocks: [{ kind: "text", text: "a" + turn }] });
+		}
+		const streaming = { turn: 9, step: 1, blocks: [{ kind: "text", text: "s" }], timing: { stepStartTime: 9000 } };
+		const mkSyn = (nodes) => deriveTraceTree({ eventNodes: nodes, requests: [], callSchemas: new Map(), runningCalls: [], partial: streaming }, t);
+		const tailTree = mkSyn(later);
+		const fullTree = mkSyn(early.concat(later));
+		const pickSyn = (tr) => tr.stations.filter((st) => st.kind === "step" && st.synthetic === true)[0];
+		const s1 = pickSyn(tailTree);
+		const s2 = pickSyn(fullTree);
+		if (s1 === void 0 || s2 === void 0) throw new Error("SYNTHID1 the fixture produced no synthetic step");
+		// The window-wide counter really did move: that is what makes the old id unstable.
+		if (s1.stepNo === s2.stepNo) throw new Error("SYNTHID1 the fixture is useless: the window counter did not shift");
+		if (s1.id !== s2.id) {
+			throw new Error("SYNTHID1 the synthetic step id changed with the window (" + s1.id + " -> " + s2.id + "), so the selection pin loses it");
+		}
+		// Uniqueness must survive: the pin and React keys still rely on it.
+		const allIds = fullTree.stations.map((st) => st.id);
+		if (new Set(allIds).size !== allIds.length) throw new Error("SYNTHID1 station ids are no longer unique");
+	}
+
+	// ── TOOLLIST1: one hole in the tool catalog must not blank the request tab ─
+	// `prompt.tools` is only checked for being an ARRAY (a non-array becomes `[]`); the
+	// ENTRIES were trusted. One `null` entry threw
+	// `Cannot read properties of null (reading 'name')` during render, and the throw
+	// happens while building the tab: EVERY other tool in the catalog disappeared
+	// because of one hole, and on the server (where an error boundary is not honoured)
+	// the whole view went with it.
+	{
+		let ReactTl = null;
+		try { ReactTl = require("react"); } catch { ReactTl = null; }
+		if (ReactTl === null) {
+			console.log("TOOLLIST1 SKIPPED: react not installed");
+		} else {
+			// The helper is where the normalisation must live, so assert it directly.
+			if (typeof safeToolList !== "function") throw new Error("TOOLLIST1 safeToolList is missing");
+			if (safeToolList("nope").length !== 0) throw new Error("TOOLLIST1 a non-array catalog must normalise to []");
+			// Wrap it: without the guard the very case under test THROWS out of the suite as
+			// an anonymous TypeError instead of naming the defect it proves.
+			let mixed = null;
+			try {
+				mixed = safeToolList([null, { name: "bash", description: "d" }, void 0, 42, { name: 7, description: { x: 1 } }]);
+			} catch (e) {
+				throw new Error("TOOLLIST1 normalising a catalog with a hole threw: " + e.constructor.name + ": " + e.message.slice(0, 100));
+			}
+			if (mixed.length !== 2) throw new Error("TOOLLIST1 holes and non-objects must be dropped, found " + mixed.length + " entries");
+			if (mixed[0].name !== "bash" || mixed[0].description !== "d") throw new Error("TOOLLIST1 a real tool was mangled");
+			if (typeof mixed[1].name !== "string" || typeof mixed[1].description !== "string") {
+				throw new Error("TOOLLIST1 drifted fields must be coerced to strings, got " + typeof mixed[1].name + "/" + typeof mixed[1].description);
+			}
+			// And the projection must call it: a normaliser nobody uses fixes nothing.
+			const srcTl = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+			if (srcTl.indexOf("safeToolList(req.prompt?.tools)") < 0) {
+				throw new Error("TOOLLIST1 the request tab still reads prompt.tools raw");
+			}
+		}
+	}
+
+	// ── TEXTCOERCE1: one non-string field must not blank the panel ────────────
+	// The host contracts type `TurnErrorNode.message`, `CommandNode.args` and the
+	// compaction summary as `string`, so a non-string is a contract violation — but a
+	// violation is not "cannot happen". React throws "Objects are not valid as a React
+	// child" for one, and that throw happens during RENDER: a single drifted field
+	// blanked the whole card, and the server render (where an error boundary is not
+	// honoured) took the whole view down.
+	//
+	// This guard renders the REAL component through react-dom/server with the REAL
+	// jsx runtime. Two earlier suites here passed `React.createElement` where the
+	// bundle expects `jsx`, which turns the element key into a child and made the
+	// render succeed against skeleton markup only.
+	{
+		let ReactTc = null;
+		let rtTc = null;
+		try {
+			ReactTc = require("react");
+			rtTc = require("react/jsx-runtime");
+		} catch {
+			ReactTc = null;
+		}
+		if (ReactTc === null) {
+			console.log("TEXTCOERCE1 SKIPPED: react / react/jsx-runtime not installed");
+		} else {
+			const renderTc = require("react-dom/server").renderToStaticMarkup;
+			// The helper must coerce at the SOURCE, so `asText` itself is asserted too.
+			if (typeof asText !== "function") throw new Error("TEXTCOERCE1 asText is missing");
+			if (asText("a") !== "a") throw new Error("TEXTCOERCE1 a string must pass through");
+			if (asText(null) !== "" || asText(void 0) !== "") throw new Error("TEXTCOERCE1 nullish must become an empty string");
+			if (asText(42) !== "42" || asText(true) !== "true") throw new Error("TEXTCOERCE1 primitives must stringify");
+			// An object must degrade to something readable, not silently vanish.
+			const objText = asText({ code: "E_BAD" });
+			if (objText.indexOf("E_BAD") < 0) throw new Error("TEXTCOERCE1 an object field lost its content: " + objText);
+			if (objText.indexOf("[object Object]") >= 0) throw new Error("TEXTCOERCE1 an object field degraded to [object Object]");
+			// And the projection must actually call it: a helper nobody uses fixes nothing.
+			const srcTc = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "lib", "client.js"), "utf8");
+			for (const field of ["summary: asText(", "message: asText(", "args: asText(", "outcomeText: asText("]) {
+				if (srcTc.indexOf(field) < 0) throw new Error("TEXTCOERCE1 the projection does not coerce " + field + "…)");
+			}
+			const vmTc = require("node:vm");
+			const boxTc = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
+				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
+				react: ReactTc, jsx: rtTc.jsx, jsxs: rtTc.jsxs, fragment: rtTc.Fragment,
+				document: void 0, window: void 0, location: void 0 };
+			boxTc.globalThis = boxTc;
+			vmTc.createContext(boxTc);
+			const hTc = srcTc.indexOf("//#region pure helpers: snapshot -> timeline tree");
+			const hTcEnd = srcTc.indexOf("//#endregion", hTc);
+			const cTc = srcTc.indexOf("//#region horizontal timeline + replay component");
+			const cTcEnd = srcTc.indexOf("//#endregion", cTc);
+			vmTc.runInContext("const fragment = react.Fragment;\n" + srcTc.slice(hTc, hTcEnd) + "\n" + srcTc.slice(cTc, cTcEnd) + ";globalThis.__tc = { TraceMapView };", boxTc, { timeout: 60000 });
+			const CompTc = boxTc.__tc.TraceMapView;
+			if (typeof CompTc !== "function") throw new Error("TEXTCOERCE1 the component hook never fired");
+			const bad = { obj: 1 };
+			const cases = [
+				["turn-error message", [{ kind: "turn-error", seq: 1, time: 1, turn: 1, message: bad }]],
+				["retry failure message", [{ kind: "model-retry", seq: 2, time: 2, turn: 1, failure: { message: bad }, retry: 1, maxRetries: 3 }]],
+				["compaction summary", [{ kind: "compaction", seq: 3, time: 3, summary: bad }]],
+				["command args", [{ kind: "command", seq: 4, time: 4, name: "n", args: bad, outcome: { kind: "success", text: bad } }]],
+				["command name", [{ kind: "command", seq: 5, time: 5, name: bad, args: "x" }]],
+				["array holding an object", [{ kind: "turn-error", seq: 6, time: 6, turn: 1, message: ["a", bad] }]]
+			];
+			for (const [name, nodes] of cases) {
+				const snapTc = { eventNodes: nodes, requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+				let html = null;
+				try {
+					html = renderTc(rtTc.jsx(CompTc, {
+						useSession: (sel) => { try { return sel({ openState: "open" }); } catch { return void 0; } },
+						useTrajectory: () => snapTc,
+						t: (k) => k,
+						viewRequest: null,
+						completeViewRequest: () => {},
+						loadOlder: async () => false
+					}));
+				} catch (e) {
+					throw new Error("TEXTCOERCE1 " + name + " threw during render: " + e.constructor.name + ": " + e.message.slice(0, 120));
+				}
+				if (typeof html !== "string" || !html.includes("dstv_station")) {
+					throw new Error("TEXTCOERCE1 " + name + " rendered no station card");
+				}
+				if (html.includes("[object Object]")) throw new Error("TEXTCOERCE1 " + name + " printed [object Object]");
 			}
 		}
 	}
@@ -2026,7 +2265,11 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		if (/\bt\(/.test(btn.replace(/\/\/.*$/gm, ""))) {
 			throw new Error("COPY1 CopyBtn uses `t` directly, but it is a module-level component with no such binding");
 		}
-		if (!/failLabel/.test(btn)) throw new Error("COPY1 CopyBtn cannot render a failure state");
+		// The expression, not the word: `failLabel` sitting in a comment, or the whole
+		// `fail` branch deleted while the prop stays declared, both used to pass.
+		if (!/copyState === "fail" \? `✗ \$\{failLabel/.test(btn)) {
+			throw new Error("COPY1 CopyBtn has no rendered failure state (the branch must return `✗ ${failLabel…}`)");
+		}
 		if (!/copyState/.test(btn)) throw new Error("COPY1 CopyBtn lost its three-state feedback");
 		// Every call site must supply the failure text, or the button shows a bare "!".
 		// Split on the call marker and look inside each fragment up to the next one:
@@ -2089,6 +2332,16 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// identity and compare against the previous value first.
 		if (body.indexOf("if (prev === sessionKey) return;") < 0) {
 			throw new Error("SESSION1 the reset is unconditional — it would wipe the user's position on every render");
+		}
+		// ...and the resets must be REACHABLE. Inserting an unconditional `return;` after
+		// the comparison left every expected token in place while the effect never reset
+		// anything, and the guard above still passed.
+		const afterGuard = body.slice(body.indexOf("if (prev === sessionKey) return;") + 30);
+		const firstReset = afterGuard.indexOf("setRevealed(null)");
+		if (firstReset < 0) throw new Error("SESSION1 the reset is unreachable after the identity comparison");
+		const beforeFirstReset = afterGuard.slice(0, firstReset);
+		if (/(^|\n)\s*(if \([^)]*\) )?return;/.test(beforeFirstReset)) {
+			throw new Error("SESSION1 a return before the first reset makes the whole reset dead code");
 		}
 	}
 
@@ -2469,8 +2722,15 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		// a fixed stride: stations carry padding and idle bands sit between them, so any
 		// `(R-1)*STATION_W` formula drifts left and points at the previous card.
 		if (/26 \+ \(R - 1\) \* STATION_W/.test(src)) throw new Error("P4 the playhead must not be placed by a fixed-stride formula");
-		if (!/setPlayheadLeft/.test(src)) throw new Error("P4 the playhead position must come from a measurement");
-		if (!/el\.offsetLeft \+ el\.offsetWidth \/ 2/.test(src)) throw new Error("P4 the marker must be centred on the measured station");
+		// Assert the STATEMENT, not the identifier: `setPlayheadLeft` inside a comment or
+		// a dead `void 0; /* setPlayheadLeft(x) */` satisfied the old check while the
+		// marker never moved.
+		if (!/if \(Number\.isFinite\(docLeft\)\) setPlayheadLeft\(docLeft\);/.test(src)) {
+			throw new Error("P4 the measured position is never written to the playhead state");
+		}
+		if (!/const docLeft = el\.offsetLeft \+ el\.offsetWidth \/ 2;/.test(src)) {
+			throw new Error("P4 the marker must be centred on the measured station");
+		}
 		// It has to re-measure when layout can change.
 		if (!/window\.addEventListener\("resize", measureHead\)/.test(src)) throw new Error("P4 the marker must re-measure on resize");
 		// ...and the effect must depend on the revealed position.

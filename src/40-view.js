@@ -504,6 +504,18 @@
 			// Stable identity for "which anchor am I currently trying to land on", so the
 			// resolve effect can track the attempt itself instead of the raw props.
 			const anchorToken = (0, react.useMemo)(() => [anchorToApply, anchorInput, hash].map((v) => (typeof v === "string" ? v : "")).join("\u0000"), [anchorToApply, anchorInput, hash]);
+			// An anchor search can page for tens of seconds. If the panel unmounts (the
+			// host re-mounts the view on a conversation switch) or the session changes,
+			// the loop kept going: `stationsRef` freezes at its last value, so the
+			// "did the projection change?" test never sees progress, the inner back-off
+			// runs all 12 tries, and the next page still reports growth — up to 40 pages
+			// of history pulled for a session nobody is looking at. Nothing it then calls
+			// can be seen, so every await must re-check whether we are still here.
+			const aliveRef = (0, react.useRef)(true);
+			(0, react.useEffect)(() => {
+				aliveRef.current = true;
+				return () => { aliveRef.current = false; };
+			}, [sessionKey]);
 			const anchorApply = (0, react.useCallback)(async (raw) => {
 				const parsed = parseAnchor(raw);
 				if (parsed.ok !== true) {
@@ -537,10 +549,12 @@
 						if (target !== 0 || parsed.form === "p" || parsed.form === "t") {
 							if (anchorCoveredByWindow(parsed, stationsRef.current)) break;
 						}
+						if (aliveRef.current !== true) return false;
 						const before = stationsRef.current.length;
 						const beforeArr = stationsRef.current;
 						let moved = false;
 						try { moved = await loadOlder(); } catch { moved = false; }
+						if (aliveRef.current !== true) return false;
 						pages += 1;
 						// A deep link can legitimately page 40 times (measured 101 s on a
 						// long session). A static "loading…" gave no sign of progress, so
@@ -562,6 +576,7 @@
 						// array (identity, not length: see below).
 						for (let i = 0; i < ANCHOR_REVEAL_TRIES; i += 1) {
 							await new Promise((r) => setTimeout(r, Math.min(ANCHOR_REVEAL_MS, 20 * 2 ** i)));
+							if (aliveRef.current !== true) return false;
 							// Identity, not just length: the derived tree builds a NEW array
 							// every projection, so an unchanged reference is the only cheap
 							// proof that re-scanning would return exactly what it returned
@@ -601,16 +616,33 @@
 			// createFlightGuard: only an identical anchor is deduplicated).
 			const anchorFlight = (0, react.useMemo)(() => createFlightGuard(), []);
 			const anchorApplyGuarded = (raw) => {
+				// Both entry points (the URL/view request effect and the typed jump) go
+				// through here, so the liveness check belongs here rather than duplicated in
+				// each `.then`: a search that outlives the panel must not report success and
+				// then write its anchor into whatever conversation is on screen now.
+				if (aliveRef.current !== true) return Promise.resolve(false);
 				if (!anchorFlight.tryStart(raw)) return Promise.resolve(false);
 				return Promise.resolve(anchorApply(raw)).finally(() => anchorFlight.finish(raw));
 			};
+			// Tracks which anchor token has already been applied. The effect used to depend
+			// on `N` as well, so EVERY new station (a live session) re-ran it: it re-applied
+			// the anchor that had just been mirrored into the URL and yanked `revealed` back,
+			// so a deep-linked reader could not step away from the anchor at all.
+			const appliedAnchorRef = (0, react.useRef)(null);
 			(0, react.useEffect)(() => {
 				if (N === 0) return;
 				const wanted = (anchorToApply !== null && anchorToApply !== "") ? anchorToApply : anchorInput.trim();
 				if (wanted === "") return;
+				// `N` must stay in the dependency list: a deep link can arrive before the
+				// projection has any stations, and the retry on growth is what makes it
+				// land at all. What must NOT happen is re-applying an anchor that already
+				// succeeded — that is what yanked the reader back. So remember only the
+				// token that LANDED; a failed attempt stays retryable.
+				if (appliedAnchorRef.current === anchorToken) return;
 				let cancelled = false;
 				void anchorApplyGuarded(wanted).then((ok) => {
 					if (cancelled) return;
+					if (ok) appliedAnchorRef.current = anchorToken;
 					// a successful landing becomes shareable: mirror it into the URL
 					if (ok && typeof location !== "undefined") {
 						const next = nextHashFor(location.hash, wanted);
@@ -1647,7 +1679,10 @@
 				if (req == null) return null;
 				const cfg = req.config ?? {};
 				const usage = req.usage;
-				const tools = req.prompt?.tools ?? [];
+				// The catalog comes from the host: an entry can be a hole (null) and the
+				// fields can be drifted. Normalise ONCE here — every reader below
+				// (`tools.map`, the JSON previews, the React keys) then sees a safe shape.
+				const tools = safeToolList(req.prompt?.tools);
 				const diff = req.promptDiff ?? null;
 				const evidenceChips = evidenceOf(req, activeMessages, hasMore);
 
@@ -1748,7 +1783,7 @@
 						jsxs("details", { className: "dstv_det", open: false, children: [
 							jsx("summary", { children: [`${t("detail.toolsCatalog")} (${tools.length})`] }, "tcSum"),
 							jsx("div", { className: "inner", children: tools.map((tool) => jsxs("details", { className: "dstv_det", open: false, children: [
-								jsx("summary", { children: [jsx("span", { className: "tname", children: tool.name }, "tn"), jsx("span", { className: "sub", children: firstLine(tool.description ?? "") }, "td")] }, `ts${tool.name}`),
+								jsx("summary", { children: [jsx("span", { className: "tname", children: tool.name !== "" ? tool.name : t("detail.toolUnnamed") }, "tn"), jsx("span", { className: "sub", children: firstLine(tool.description) }, "td")] }, `ts${tool.name}`),
 								jsx("div", { className: "inner", children: jsx("div", { className: "dstv_code", style: { maxHeight: 160 }, children: prettyJson(tool.parameters) }, "tcCode") }, `ti${tool.name}`)
 							] }, `tool${tool.name}`)) }, "tcInner")
 						] }, "tcDet")

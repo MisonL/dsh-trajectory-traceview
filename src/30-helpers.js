@@ -30,6 +30,51 @@
 			}
 			return "";
 		}
+
+		/**
+		 * Coerce a projected field to a string at the SOURCE, not at every render site.
+		 *
+		 * The host contracts type these fields as `string` (`TurnErrorNode.message`,
+		 * `CommandNode.args`, compaction summary), so a non-string is already a contract
+		 * violation — but "already a violation" is not the same as "cannot happen", and
+		 * this plugin's rule is that one bad field degrades ITS OWN record, never the
+		 * panel. React throws `Objects are not valid as a React child` for an object, so a
+		 * single drifted field blanked the whole card (and, outside the boundary, the
+		 * whole view) instead of printing something.
+		 *
+		 * Objects fall back to their JSON so the reader can still see what arrived; that
+		 * is strictly more useful than "[object Object]" and it never throws.
+		 */
+		function asText(value) {
+			if (typeof value === "string") return value;
+			if (value === null || value === void 0) return "";
+			if (typeof value === "number" || typeof value === "boolean") return String(value);
+			try { return safeJsonPreview(value, 2000); } catch (e) { return ""; }
+		}
+		/**
+		 * Normalise a prompt's tool catalog for rendering.
+		 *
+		 * `prompt.tools` reaches the request tab straight from the host and is only
+		 * checked for being an array (the fold replaces a non-array with `[]`); the
+		 * ENTRIES were trusted. One `null` entry threw
+		 * `Cannot read properties of null (reading 'name')` during render and blanked
+		 * the whole request tab — every other tool in the catalog disappeared because
+		 * of one hole in the list. Drop holes, coerce the three fields we print, and
+		 * keep the order so the catalog still reads like the real one.
+		 */
+		function safeToolList(tools) {
+			if (!Array.isArray(tools)) return [];
+			const out = [];
+			for (const raw of tools) {
+				if (raw === null || typeof raw !== "object") continue;
+				out.push({
+					name: asText(raw.name),
+					description: asText(raw.description),
+					parameters: raw.parameters
+				});
+			}
+			return out;
+		}
 		/** First text block of a ContentBlock list (full text). */
 		function textOfContent(content, t) {
 			// `for…of` on a non-array throws, and a host payload with a wrong-shaped
@@ -322,12 +367,24 @@
 					if (typeof text !== "string") text = String(text);
 				} catch (plain) {
 					try {
-						const seen = new WeakSet();
-						text = JSON.stringify(value, (k, v) => {
+						// ANCESTRY, not "seen anywhere". A WeakSet that is never cleared marks
+						// any value met twice, so one BigInt or one real cycle anywhere in the
+						// payload turned every ordinary alias (`{a: shared, b: shared}`, two
+						// tools sharing one schema object) into "[Circular]" — silently hiding
+						// content that is perfectly representable. `[Circular]` must mean "this
+						// object is its own ANCESTOR", so the check walks the holder chain that
+						// the replacer's `this` already gives us: record which object contains
+						// which, then ask whether the current container descends from the value.
+						// (A push/pop stack cannot work here: the replacer is never told when it
+						// leaves a value, so nothing would ever pop.)
+						const parents = new WeakMap();
+						text = JSON.stringify(value, function (k, v) {
 							if (typeof v === "bigint") return `${String(v)}n`;
 							if (v !== null && typeof v === "object") {
-								if (seen.has(v)) return "[Circular]";
-								seen.add(v);
+								for (let h = this; h !== null && typeof h === "object"; h = parents.get(h)) {
+									if (h === v) return "[Circular]";
+								}
+								parents.set(v, this);
 							}
 							return v;
 						}, pad);
@@ -1249,7 +1306,7 @@ const usedStationIds = new Set();
 					}
 					e.stations.push({
 						id: `m${n.seq}`, kind: "compaction", time: n.time, seq: n.seq,
-						summary: n.summary ?? "", count: n.shadowedItemCount ?? null, tokens: n.shadowedTokenCount ?? null,
+						summary: asText(n.summary), count: n.shadowedItemCount ?? null, tokens: n.shadowedTokenCount ?? null,
 						crequest,
 						label: t("node.compaction")
 					});
@@ -1257,13 +1314,13 @@ const usedStationIds = new Set();
 					const e = ensureTurn(typeof n.turn === "number" ? n.turn : 0, n.seq);
 					e.stations.push({
 						id: `e${n.seq}`, kind: "error", time: n.time, seq: n.seq,
-						message: n.message ?? "", code: n.code, label: t("node.error")
+						message: asText(n.message), code: n.code, label: t("node.error")
 					});
 				} else if (n.kind === "model-retry") {
 					const e = ensureTurn(typeof n.turn === "number" ? n.turn : 0, n.seq);
 					e.stations.push({
 						id: `y${n.seq}`, kind: "retry", time: n.time, seq: n.seq,
-						message: n.failure?.message ?? "", code: n.failure?.code,
+						message: asText(n.failure?.message), code: n.failure?.code,
 						retry: n.retry, maxRetries: n.maxRetries, provider: n.provider,
 						retryState: n.retryState, label: t("node.retry")
 					});
@@ -1274,8 +1331,8 @@ const usedStationIds = new Set();
 					const e = turnForSeq(n.seq);
 					e.stations.push({
 						id: `c${n.seq}`, kind: "command", time: n.time, seq: n.seq,
-						name: n.name ?? `/${n.commandId}`, args: n.args ?? "",
-						outcomeKind: n.outcome?.kind ?? null, outcomeText: n.outcome?.text ?? "",
+						name: asText(n.name) !== "" ? asText(n.name) : `/${n.commandId}`, args: asText(n.args),
+						outcomeKind: n.outcome?.kind ?? null, outcomeText: asText(n.outcome?.text),
 						label: t("node.command")
 					});
 				} else if (n.kind === "unknown") {
@@ -1457,7 +1514,20 @@ const usedStationIds = new Set();
 							// and the selection pin (which keys on id) silently pointed at a
 							// different record. anchorSeq is the stable, persisted identity;
 							// fall back to the counter only for synthetic steps without one.
-							id: anchorSeq !== null ? `s${anchorSeq}` : `sx${String(e.turn)}-${String(piece.stepNum)}-${String(stepCounter)}`,
+							// A synthetic step has no persisted seq, so its id used to embed
+							// `stepCounter` — a WINDOW-wide running count. Prepending older
+							// history then changed the id of the very step the reader had
+							// selected, the pin's `findIndex` returned -1, and the panel
+							// silently showed a DIFFERENT record at the same position. Turn +
+							// per-turn step is stable across paging; duplicates (a malformed
+							// log repeating a step number) get a suffix instead.
+							id: anchorSeq !== null ? `s${anchorSeq}` : (() => {
+								const base = `sx${String(e.turn)}-${String(piece.stepNum)}`;
+								let cand = base;
+								for (let dupe = 2; usedStationIds.has(cand); dupe += 1) cand = `${base}-${String(dupe)}`;
+								usedStationIds.add(cand);
+								return cand;
+							})(),
 							kind: "step",
 							stepNo: stepCounter,
 							// Per-turn step number. `stepNo` above is a WINDOW-wide running
