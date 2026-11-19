@@ -982,6 +982,31 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── TOOLSET1: a tool-set notice must name the tool ────────────────────────
+	// `tool-addition` / `tool-removal` are defined ContentBlock types, but they fell
+	// through to the "unknown block" branch: a context row that exists only to announce
+	// `read_file` rendered as "[other content] · tool-addition", discarding the one
+	// piece of information it carried.
+	{
+		const dict = {
+			"block.toolAdded": "[tool added] {name}",
+			"block.toolRemoved": "[tool removed] {name}",
+			"block.other": "[other content]"
+		};
+		const tt = (k) => (dict[k] !== void 0 ? dict[k] : k);
+		const added = textOfContent([{ type: "tool-addition", toolName: "read_file" }], tt);
+		if (added.indexOf("read_file") < 0) throw new Error("TOOLSET1 a tool-addition lost its tool name: " + JSON.stringify(added));
+		if (added.indexOf("tool-addition") >= 0) throw new Error("TOOLSET1 a tool-addition still renders its raw type: " + JSON.stringify(added));
+		const removed = textOfContent([{ type: "tool-removal", toolName: "bash" }], tt);
+		if (removed.indexOf("bash") < 0) throw new Error("TOOLSET1 a tool-removal lost its tool name: " + JSON.stringify(removed));
+		// A nameless entry must still say something rather than render an empty row.
+		const nameless = textOfContent([{ type: "tool-addition" }], tt);
+		if (nameless === "") throw new Error("TOOLSET1 a nameless tool entry rendered as nothing at all");
+		// A genuinely unknown block type still degrades to its tag.
+		const unknown = textOfContent([{ type: "some-future-block" }], tt);
+		if (unknown.indexOf("some-future-block") < 0) throw new Error("TOOLSET1 unknown blocks must keep their type tag");
+	}
+
 	// ── ANCHOR5: the deep-link loop must not re-scan an unchanged list ────────
 	// The reveal loop called the O(n) anchor scan on every 20/40/…/250 ms retry even
 	// when the projection had not replaced `stationsRef.current`. With a 3,600-station

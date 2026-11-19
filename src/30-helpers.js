@@ -51,6 +51,24 @@
 					parts.push(name !== null ? `${label}: ${name}` : label);
 					continue;
 				}
+				// Tool-set changes are a defined ContentBlock type, not unknown payload:
+				// rendering them as "other content · tool-addition" threw away the tool
+				// NAME, which is the only thing the notice is about. The official layout
+				// spells it out the same way.
+				if (b.type === "tool-addition" || b.type === "tool-removal") {
+					const name = typeof b.toolName === "string" && b.toolName !== "" ? b.toolName : null;
+					// A nameless entry still has to say SOMETHING: dropping it made a
+					// tool-set change render as an empty row. Degrade to the generic tag.
+					if (name !== null) {
+						const key = b.type === "tool-addition" ? "block.toolAdded" : "block.toolRemoved";
+						const fallback = b.type === "tool-addition" ? "[tool added] " : "[tool removed] ";
+						parts.push(typeof t === "function" ? t(key).replace("{name}", name) : fallback + name);
+					} else {
+						const label = typeof t === "function" ? t("block.other") : "other";
+						parts.push(`${label} · ${b.type}`);
+					}
+					continue;
+				}
 				// Unknown/plugin-added blocks degrade to their type tag instead of vanishing.
 				if (typeof b.type === "string" && b.type !== "") {
 					const label = typeof t === "function" ? t("block.other") : "other";
