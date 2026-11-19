@@ -1881,6 +1881,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── HINT1: the keyboard hint must name the keys that are actually bound ────
+	// The header told the user "⇤⇥ 跳轮次", but ⇤/⇥ are the Tab/Shift+Tab glyphs printed
+	// on the keycaps; the binding is PageUp/PageDown. A user following the hint pressed
+	// Tab, watched focus move inside the panel, and concluded the shortcut was broken.
+	{
+		const srcHt = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		// Every glyph claimed by the hint must correspond to a real binding.
+		const hintZh = /"hint\.text":\s*"([^"]*)"/.exec(srcHt);
+		const hintEnIdx = srcHt.indexOf('"hint.text"', srcHt.indexOf('"hint.text"') + 1);
+		const hintEn = hintEnIdx > 0 ? /"hint\.text":\s*"([^"]*)"/.exec(srcHt.slice(hintEnIdx - 20)) : null;
+		if (hintZh === null) throw new Error("HINT1 the keyboard hint is missing");
+		if (hintZh[1].indexOf("⇤") >= 0 || hintZh[1].indexOf("⇥") >= 0) {
+			throw new Error("HINT1 the hint advertises Tab glyphs but the binding is PageUp/PageDown: " + hintZh[1].slice(0, 80));
+		}
+		// Whatever it DOES advertise has to be spelled out and bound.
+		if (hintZh[1].indexOf("PgUp") < 0 && hintZh[1].indexOf("PageUp") < 0) {
+			throw new Error("HINT1 the hint no longer mentions the turn-jump keys at all: " + hintZh[1].slice(0, 80));
+		}
+		if (!/k === "PageUp"/.test(srcHt) || !/k === "PageDown"/.test(srcHt)) {
+			throw new Error("HINT1 the hint names a turn-jump key that is not bound");
+		}
+		// The English side must not keep the old glyphs either.
+		if (hintEn !== null && (hintEn[1].indexOf("⇤") >= 0 || hintEn[1].indexOf("⇥") >= 0)) {
+			throw new Error("HINT1 the English hint still advertises Tab glyphs");
+		}
+	}
+
 	// ── LOADFAIL1: a failed page must not look like a successful one ──────────
 	// The host's `loadOlder` SWALLOWS its own failures: it resolves normally and only
 	// flips `historyLoadStatus` to 'error' (dsh-api-session-controller
