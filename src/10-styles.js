@@ -233,7 +233,7 @@
 			".dstv_cfgChip{font-size:10.5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:2px 7px;border-radius:7px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);display:inline-flex;align-items:center;gap:4px}",
 			".dstv_cfgChip b{color:var(--dsw-alias-label-primary);font-weight:600}",
 			".dstv_dHead .dstv_chip{margin-left:2px}",
-			".dstv_search{display:inline-flex;align-items:center;gap:4px;margin-left:auto;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);transition:border-color .15s,box-shadow .15s}",
+			".dstv_search{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:wrap;max-width:100%;justify-content:flex-end;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);transition:border-color .15s,box-shadow .15s}",
 			// Keyboard users move through stations with the roving tabindex; without a
 			// visible ring they cannot tell where they are. Mouse clicks stay unaffected.
 			".dstv_station:focus-visible{outline:2px solid var(--dstv-info);outline-offset:2px;border-radius:10px}",
