@@ -972,12 +972,21 @@
 			// requests (a header in force covers steps until a newer one replaces it).
 			const requestsByStep = new Map();
 			const compactionReqs = [];
+			let unplaceableRequests = 0;
+			// Keys that actually found a step. Anything left over is a request the log
+			// recorded but this view could not place; it must be reported, not discarded.
+			const consumedRequestKeys = new Set();
 			{
 				const reqs = safeList(snap?.requests).sort((a, b) => a.startSeq - b.startSeq);
 				let lastPrompt = null;
 				for (const r of reqs) {
 					if (r?.purpose === "compaction") { compactionReqs.push(r); continue; }
-					if (r?.purpose !== "assistant" || typeof r.turn !== "number") continue;
+					// A request we cannot even key (no `turn`, or a purpose this build does
+					// not know) used to be dropped on the floor. The view promises that what
+					// the log recorded is shown, including the parts it cannot interpret —
+					// unknown NODE kinds already become visible "unknown" stations, so
+					// requests get the same treatment (a counted, explained notice).
+					if (r?.purpose !== "assistant" || typeof r.turn !== "number") { unplaceableRequests += 1; continue; }
 					const prompt = r.prompt ?? lastPrompt;
 					if (r.prompt != null) lastPrompt = r.prompt;
 					requestsByStep.set(`${r.turn}:${r.step}`, { req: r, prompt });
@@ -1508,6 +1517,7 @@
 						const found = requestsByStep.get(key);
 						let request = null;
 						if (found !== void 0) {
+							consumedRequestKeys.add(key);
 							const r = found.req;
 							request = {
 								status: r.status,
@@ -1674,7 +1684,14 @@
 				stats,
 				// drift diagnostics (see snapshotContract / unknownNodeStats)
 				contract,
-				nodeStats
+				nodeStats,
+				// Requests the log carries that could not be attached to a step. Counted
+				// rather than dropped, and shown in the header next to the node-drift chips.
+				unplacedRequests: (() => {
+					let n = unplaceableRequests;
+					for (const key of requestsByStep.keys()) if (!consumedRequestKeys.has(key)) n += 1;
+					return n;
+				})()
 			};
 		}
 		/**

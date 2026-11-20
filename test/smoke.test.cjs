@@ -1881,6 +1881,35 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── UNPLACEDREQ1: a request the log carries must never be dropped in silence ──
+	// `requests` are keyed by `${turn}:${step}` and attached while stations are built.
+	// A request whose step never appears (a request that failed before producing a
+	// message), a duplicate key, or a `purpose` this build does not know was simply
+	// never read — no station, no warning, `contract.ok === true`. Unknown NODE kinds
+	// already become visible "unknown" stations, so requests must be counted too.
+	{
+		const nodesRq = [
+			{ kind: "user", seq: 1, time: 1e12, turn: 1, content: [{ type: "text", text: "u" }] },
+			{ kind: "assistant", seq: 2, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }
+		];
+		const foldRq = (requests) => deriveTraceTree({ eventNodes: nodesRq, requests, callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const count = (requests, expect, label) => {
+			const got = foldRq(requests).unplacedRequests;
+			if (got !== expect) throw new Error("UNPLACEDREQ1 " + label + ": expected " + expect + ", got " + got);
+		};
+		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "compaction", turn: 1, step: 1 }], 0, "a fully matched list");
+		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "assistant", turn: 9, step: 1 }], 1, "a request for a step that is not there");
+		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "weird", turn: 1, step: 1 }], 1, "an unknown purpose");
+		count([{ purpose: "assistant", step: 1 }], 1, "a request with no turn");
+		count([], 0, "an empty list");
+		// The count must reach the reader, not just the object.
+		const srcAll = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		if (srcAll.indexOf('t("view.unplacedReq")') < 0) throw new Error("UNPLACEDREQ1 the header has no chip for unplaced requests");
+		if (srcAll.indexOf('t("view.unplacedReqTip")') < 0) throw new Error("UNPLACEDREQ1 the chip has no explanation");
+		// And the property must actually be wired into the header condition.
+		if (!/tree\.unplacedRequests > 0/.test(srcAll)) throw new Error("UNPLACEDREQ1 the chip is not gated on a non-zero count");
+	}
+
 	// ── MATCHSTART1: a fresh query must not claim a match position it doesn't hold ──
 	// `matchPtr` started at 0, so the counter read "1/3" the instant the reader typed —
 	// while the timeline had not moved — and the FIRST "next" then went to match 2.

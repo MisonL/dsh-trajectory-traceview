@@ -1038,6 +1038,11 @@
 						title: `${t("view.driftTip")}${tree.nodeStats.kinds.length > 0 ? ` [${tree.nodeStats.kinds.join(", ")}]` : ""}`,
 						children: `⚠ ${t("view.drift").replace("{n}", String(tree.nodeStats.unknown))}`
 					}, "hDrift") : null,
+					tree.unplacedRequests > 0 ? jsx("span", {
+						className: "dstv_warn",
+						title: t("view.unplacedReqTip"),
+						children: `⚠ ${t("view.unplacedReq").replace("{n}", String(tree.unplacedRequests))}`
+					}, "hReq") : null,
 					tree.nodeStats != null && tree.nodeStats.invalid > 0 ? jsx("span", {
 						className: "dstv_chip warn",
 						title: t("view.invalidTip"),
