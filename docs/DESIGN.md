@@ -5919,3 +5919,45 @@ Codex 复核时说的"streamTick 每次重建 deriveTraceTree，helper 为每站
 #### 顺带留下的一件真事
 
 同 `turn:step` 下流式文本最多滞后 **120ms** 才上屏（`STREAM_REBUILD_MS`）。这是刻意的取舍（避免每 token 重建），也是那 38ms 的来源。要不要调小是个产品决定，不动。
+
+### 13.09 修两处静默丢数据：重复请求与重复 callId（2026-11-20）
+
+先用独立探针确认这两处**真的是**缺陷，而不是文档里传错了：
+
+```
+A) 同一 turn:step 两条请求   → unplacedRequests = 0（期望 1）
+B) 同一 turn 两条 tool-call 用同一 callId → 只剩 1 个 cell，name = ["a"]（期望 a + b）
+```
+
+#### A：请求按 `turn:step` 建 Map，`set` 覆盖前者
+
+合并过/重试过的日志里，同一个 `turn:step` 可以有两条请求（一次失败 + 一次成功）。原来的 `Map.set` 只留最后一条，前一条的 status / usage / prompt **无声消失**，而且计数里也查不出来。
+
+改成 `Map<key, Array<entry>>`：站点消费最早的一条（`shift()`），剩下的全都计入 `unplacedRequests`。
+
+**我自己第一次写错了计数**：既算 `bucket.length` 又算 "key 未消费"，于是 1 条被数成 2，连带着 `EXPORTDRIFT1` 守卫也红。改成只数 `bucket.length`（`shift()` 已经移走了消费掉的），并删掉不再需要的 `consumedRequestKeys`。
+
+#### B：callId 去重是 `Set<turn:callId>`，"先到先得"
+
+那个 Set 本来有正当用途：阻止**同一个**调用被三个来源重复附加（持久化块 / `runningCalls` / 流式 partial）。但它把"同一轮里两个真正不同的调用碰巧共用 id"也当成重复，第二个 cell 直接消失。
+
+改成 `Map<key, claimCount>`：
+
+- 持久化循环里**每个 tool-call 块都 claim 一次**（同 id 的两个块 = 两次真实调用）
+- `runningCalls` 和 partial **只在 key 已被 claim 过时跳过**（这仍是防重复附加，不是防真实调用）
+
+这样两件事都成立：去重仍然防止同一调用重复出现，真实重复 id 的两个调用都保留。
+
+#### 变异证据（必须变红）
+
+| 变异 | 守卫 | 结果 |
+|---|---|---|
+| 丢弃重复请求（保持 bucket 形状） | `LOSS1` | **红**：`expected 1 unplaced, got 0` |
+| 同 turn callId 回到 first-wins | `LOSS1` | **红**：`expected alpha+beta, got ["alpha"]` |
+| 恢复 | — | 绿 |
+
+第一次变异 A 我只把 `set` 改回去却没改消费端，`bucket.shift()` 抛 TypeError——**那是测试脚手架自己造成的失败，不算证据**，已按规矩重做。
+
+#### 附带说明
+
+`cellId` 里 verbatim 的 callId 我**没有动**：anchor 走的是 `station.anchorKey`（`e<seq>`），不是 cell id；而 cell id 里保留原 callId 是给 React key 与调试用的。两个同 id 的 cell 在同一 station 里会得到相同 key——这是本改动**没有**解决的一个残留点，记在这里。

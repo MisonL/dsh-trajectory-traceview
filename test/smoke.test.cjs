@@ -4415,6 +4415,39 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (h4.hash !== "#tvp1:e3019" || h4.changed !== false) throw new Error("G2 must never clear a hash by accident");
 	const h5 = nextHashFor("#keep", null);
 	if (h5.hash !== "#keep" || h5.changed !== false) throw new Error("G2 must tolerate a missing anchor");
+
+	// ── LOSS1: two real records that collide on a key must BOTH survive ──────
+	// (a) two requests for the same turn:step — a merged/retried log can carry both.
+	// A `Map.set` kept only the last: status/usage/prompt silently lost, and no count.
+	{
+		const nodesDup = [
+			{ kind: "user", seq: 1, time: 1e12, turn: 1, content: [{ type: "text", text: "u" }] },
+			{ kind: "assistant", seq: 2, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }
+		];
+		const reqs = [
+			{ purpose: "assistant", turn: 1, step: 1, status: "error", startSeq: 2, startedAt: 100, completedAt: 900, error: { message: "first" }, prompt: { system: "A" } },
+			{ purpose: "assistant", turn: 1, step: 1, status: "ok", startSeq: 2, startedAt: 1000, completedAt: 2800, prompt: { system: "B" } }
+		];
+		const folded = deriveTraceTree({ eventNodes: nodesDup, requests: reqs, callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		if (folded.unplacedRequests !== 1) throw new Error("LOSS1 duplicate turn:step requests: expected 1 unplaced, got " + folded.unplacedRequests);
+	}
+	// (b) two DISTINCT tool-call blocks with the same callId in one turn.
+	// The old Set-based dedupe was "first wins": the second call disappeared entirely.
+	{
+		const nodesCall = [
+			{ kind: "user", seq: 1, time: 1e12, turn: 1, content: [{ type: "text", text: "u" }] },
+			{ kind: "assistant", seq: 2, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [
+				{ kind: "tool-call", callId: "dup", name: "alpha", argsRaw: "{}" },
+				{ kind: "tool-call", callId: "dup", name: "beta", argsRaw: "{}" }
+			] }
+		];
+		const folded = deriveTraceTree({ eventNodes: nodesCall, requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const names = [];
+		for (const st of folded.stations) for (const c of (st.cells || [])) if (c.kind === "tool") names.push(c.name);
+		if (names.length !== 2 || names.indexOf("alpha") < 0 || names.indexOf("beta") < 0) {
+			throw new Error("LOSS1 duplicate callId in one turn: expected alpha+beta, got " + JSON.stringify(names));
+		}
+	}
 }
 
 console.log("TV PLUGIN SMOKE TEST (v5) OK — turns=" + tree.stats.turns + " steps=" + tree.totalSteps + " stations=" + tree.stations.length + " tokensIn=" + tree.stats.tokensIn + " model=" + tree.stats.lastModel);

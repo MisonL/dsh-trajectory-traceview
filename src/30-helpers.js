@@ -970,7 +970,7 @@
 			// by a buggy client: the same id can appear in two different turns. A plain
 			// `Map<callId, result>` kept only the LAST one, so turn 1's call displayed
 			// turn 2's output (wrong data) while turn 2's call was dropped by the
-			// `attachedCallIds` dedupe (lost data) — silently, which is the one outcome
+			// claim-based dedupe below (lost data) — silently, which is the one outcome
 			// this view promises never to produce. Keep every result per id, ordered by
 			// seq, and let each call claim the next unconsumed one.
 			const resultsById = new Map();
@@ -994,7 +994,13 @@
 			// result surfaced as an unrelated "orphan" in whatever turn the seq happened to
 			// fall in. The cell ids below (`t${callId}`) stay call-keyed, so a per-turn
 			// scope produces distinct React keys too.
-			const attachedCallIds = new Set();
+			// Claims per `${turn}:${callId}`. A plain Set gave the durable loop "first wins":
+			// two DISTINCT tool-call blocks sharing an id in one turn made the second vanish.
+			// The same guard is still needed across the three sources (durable / running /
+			// partial) so one call is not attached twice, hence a claim COUNT.
+			const attachedCalls = new Map();
+			const claimCall = (ck) => { const n = attachedCalls.get(ck) ?? 0; attachedCalls.set(ck, n + 1); return n; };
+			const claimedCall = (ck) => (attachedCalls.get(ck) ?? 0) > 0;
 			const callKey = (turn, callId) => `${String(turn)}:${String(callId)}`;
 			/**
 			 * Cell ids double as React keys, and `callId` comes straight from the log. A
@@ -1019,12 +1025,15 @@
 
 			// Requests keyed by `${turn}:${step}`, with prompt inheritance across
 			// requests (a header in force covers steps until a newer one replaces it).
+			// A merged/retried log can carry MORE THAN ONE request for the same turn:step.
+			// A plain `Map.set` kept only the last, silently losing status/usage/prompt from
+			// the earlier one. Keep every request per key in log order; a station consumes the
+			// earliest unclaimed one, and leftovers are counted as unplaced, never discarded.
 			const requestsByStep = new Map();
 			const compactionReqs = [];
 			let unplaceableRequests = 0;
 			// Keys that actually found a step. Anything left over is a request the log
 			// recorded but this view could not place; it must be reported, not discarded.
-			const consumedRequestKeys = new Set();
 			{
 				const reqs = safeList(snap?.requests).sort((a, b) => a.startSeq - b.startSeq);
 				let lastPrompt = null;
@@ -1038,7 +1047,11 @@
 					if (r?.purpose !== "assistant" || typeof r.turn !== "number") { unplaceableRequests += 1; continue; }
 					const prompt = r.prompt ?? lastPrompt;
 					if (r.prompt != null) lastPrompt = r.prompt;
-					requestsByStep.set(`${r.turn}:${r.step}`, { req: r, prompt });
+					const rk = `${r.turn}:${r.step}`;
+					const bucket = requestsByStep.get(rk);
+					const entry = { req: r, prompt };
+					if (bucket === void 0) requestsByStep.set(rk, [entry]);
+					else bucket.push(entry);
 				}
 			}
 
@@ -1151,8 +1164,7 @@
 							st.cells.push({ id: `o${n.seq}${st.cells.length}`, kind: "assistant", text: label, thinking: "" });
 						} else if (b.kind === "tool-call") {
 							const ck1 = callKey(turn, b.callId);
-							if (attachedCallIds.has(ck1)) continue;
-							attachedCallIds.add(ck1);
+							claimCall(ck1); // every durable block is a real call, even with a repeated id
 							const res = takeResult(b.callId);
 							const isRunning = res === undefined && runningById.has(b.callId);
 							if (isRunning) st.live = true;
@@ -1233,11 +1245,11 @@
 
 			// In-flight tool calls not already attached via an assistant block.
 			for (const c of safeList(snap?.runningCalls)) {
-				if (typeof c.turn !== "number" || attachedCallIds.has(callKey(c.turn, c.callId))) continue;
+				if (typeof c.turn !== "number" || claimedCall(callKey(c.turn, c.callId))) continue;
 				// Claim the call id here as well: the streaming partial can describe the very
 				// same in-flight call, and without claiming it the tool is counted twice
 				// (once from runningCalls, once from the partial block).
-				attachedCallIds.add(callKey(c.turn, c.callId));
+				claimCall(callKey(c.turn, c.callId));
 				const e = ensureTurn(c.turn, c.time);
 				const step = stepOf(c.step);
 				if (e.steps === void 0) e.steps = new Map();
@@ -1318,8 +1330,8 @@
 						st.cells.push({ id: `po${st.cells.length}`, kind: "assistant", text: plabel, thinking: "" });
 					} else if (b.kind === "tool-call") {
 						const ck3 = callKey(turn, b.callId);
-						if (attachedCallIds.has(ck3)) continue;
-						attachedCallIds.add(ck3);
+						if (claimedCall(ck3)) continue;
+						claimCall(ck3);
 						const res = takeResult(b.callId);
 						st.toolCount += 1;
 						if (res?.isError === true) st.hasError = true;
@@ -1569,10 +1581,12 @@
 						}
 						// attach request info (messages are reconstructed lazily in the component)
 						const key = `${e.turn}:${piece.stepNum}`;
-						const found = requestsByStep.get(key);
+						const bucket = requestsByStep.get(key);
+						// Every request in the bucket is a real record. Consume the earliest and
+						// let the unplaced accounting report any remainder.
+						const found = bucket === void 0 ? void 0 : bucket.shift();
 						let request = null;
 						if (found !== void 0) {
-							consumedRequestKeys.add(key);
 							const r = found.req;
 							request = {
 								status: r.status,
@@ -1744,7 +1758,11 @@
 				// rather than dropped, and shown in the header next to the node-drift chips.
 				unplacedRequests: (() => {
 					let n = unplaceableRequests;
-					for (const key of requestsByStep.keys()) if (!consumedRequestKeys.has(key)) n += 1;
+					for (const bucket of requestsByStep.values()) n += bucket.length;
+					// `shift()` already removed every request that found a step, so whatever
+					// remains is exactly the set of unplaced requests — counting both the
+					// bucket and the "key not consumed" flag would double-count them.
+
 					return n;
 				})()
 			};

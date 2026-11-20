@@ -27,6 +27,7 @@
 
 - `docs/DESIGN.md`
 - `docs/PROVENANCE.md`
+- `scripts/bench-fold.mjs`
 - `scripts/browser-check.mjs`
 - `scripts/browser-harness.mjs`
 - `scripts/build-client.mjs`
