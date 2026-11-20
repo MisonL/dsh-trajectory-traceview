@@ -1881,6 +1881,43 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── MATCHSTART1: a fresh query must not claim a match position it doesn't hold ──
+	// `matchPtr` started at 0, so the counter read "1/3" the instant the reader typed —
+	// while the timeline had not moved — and the FIRST "next" then went to match 2.
+	// Match 1 was only reachable by wrapping all the way round the ring. The pointer now
+	// starts at -1 ("none") and the counter says "–/3".
+	{
+		const srcMs = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const grabMs = (() => {
+			const at = srcMs.indexOf("const gotoMatch = (dir) => {");
+			if (at < 0) throw new Error("MATCHSTART1 gotoMatch is missing");
+			let i = srcMs.indexOf("{", at), d = 0;
+			for (; i < srcMs.length; i += 1) { if (srcMs[i] === "{") d += 1; else if (srcMs[i] === "}") { d -= 1; if (d === 0) { i += 1; break; } } }
+			return srcMs.slice(at, i);
+		})();
+		const stepMs = (ptr, len, dir) => {
+			const out = { landed: null };
+			new Function("dir", "matchPtr", "matches", "setMatchPtr", "seek", grabMs + "\ngotoMatch(dir);")(
+				dir, ptr, Array.from({ length: len }, (_, k) => k), () => {}, (i) => { out.landed = i; });
+			return out.landed;
+		};
+		// From "nothing selected", the first step in each direction hits an END of the ring.
+		if (stepMs(-1, 3, 1) !== 0) throw new Error("MATCHSTART1 the first next skipped the first match");
+		if (stepMs(-1, 3, -1) !== 2) throw new Error("MATCHSTART1 the first prev must land on the last match");
+		// And a single match must be reachable both ways without falling off.
+		if (stepMs(-1, 1, 1) !== 0 || stepMs(-1, 1, -1) !== 0) throw new Error("MATCHSTART1 a single match is unreachable");
+		// The pointer must start at "none" — starting at 0 IS the bug.
+		if (!/useState\)\(-1\)/.test(srcMs.slice(srcMs.indexOf("matchPtr, setMatchPtr"), srcMs.indexOf("matchPtr, setMatchPtr") + 80))) {
+			throw new Error("MATCHSTART1 matchPtr no longer starts at -1");
+		}
+		// The counter must have a "no current match" branch. It only renders while a query
+		// is active, and a static render starts with an empty query, so this cannot be
+		// asserted from rendered HTML — check the branch instead.
+		if (srcMs.indexOf("matchPtr < 0 ?") < 0) {
+			throw new Error("MATCHSTART1 the counter has no 'no match selected' branch");
+		}
+	}
+
 	// ── NOPAGER1: no paging affordance without a paging callback ───────────────
 	// `hasMore` is a property of the SESSION; it says nothing about whether this view was
 	// handed a way to fetch. The slot's `inject` returns `{}` when the session binding is
@@ -3192,8 +3229,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			if (!/const collectSubs = \(list, depth\)/.test(srcN)) throw new Error("X1-n stationHay must walk sub-calls recursively");
 			if (/for \(const deep of sub\.subCalls/.test(srcN)) throw new Error("X1-n the fixed two-level walk must be gone");
 
-			// A stale match pointer must be clamped before stepping.
-			if (!/const base = Math\.min\(matchPtr, matches\.length - 1\)/.test(srcN)) throw new Error("X1-n matchPtr must be clamped to the live match list");
+			// A stale match pointer must be clamped before stepping, and a FRESH query must
+			// not claim a position: the real body is executed rather than pattern-matched,
+			// because the literal expression changed once already and this guard then
+			// reported a regression that was not one.
+			{
+				const grabGm = (() => {
+					const at = srcN.indexOf("const gotoMatch = (dir) => {");
+					if (at < 0) return "";
+					let i = srcN.indexOf("{", at), d = 0;
+					for (; i < srcN.length; i += 1) { if (srcN[i] === "{") d += 1; else if (srcN[i] === "}") { d -= 1; if (d === 0) { i += 1; break; } } }
+					return srcN.slice(at, i);
+				})();
+				if (grabGm === "") throw new Error("X1-n gotoMatch is missing");
+				const driveGm = (ptr, len, dir) => {
+					const out = { ptr: null, seeked: null };
+					new Function("dir", "matchPtr", "matches", "setMatchPtr", "seek", grabGm + "\ngotoMatch(dir);")(
+						dir, ptr, Array.from({ length: len }, (_, k) => k), (v) => { out.ptr = v; }, (i) => { out.seeked = i; });
+					return out;
+				};
+				// A stale pointer past the end must stay inside the ring: stepping back from
+				// "past the end" lands on the last item, stepping forward lands on the first.
+				if (driveGm(9, 3, -1).seeked !== 2) throw new Error("X1-n a stale matchPtr is no longer clamped");
+				if (driveGm(9, 3, 1).seeked !== 0) throw new Error("X1-n a stale matchPtr can step out of range");
+				// A fresh query must land on match 1 / match N, not skip to match 2.
+				if (driveGm(-1, 3, 1).seeked !== 0) throw new Error("X1-n the first next skipped the first match");
+				if (driveGm(-1, 3, -1).seeked !== 2) throw new Error("X1-n the first prev must land on the last match");
+			}
 		}
 
 		// X1-m: the selection pin only works if station ids are STABLE. They used to be
