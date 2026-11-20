@@ -1881,6 +1881,52 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── STATIONNAME1: the accessible name must say WHAT the station is, not just its kind ──
+	// A station is a `role="option"`, and `aria-label` REPLACES the name computed from its
+	// descendants. The label used to be kind + position + meta only, so a screen-reader
+	// user heard "1 / 12，用户" for every user turn (all identical) and "3 / 12，错误，错误"
+	// for a failure without ever hearing what was asked or what failed. The error message
+	// is the entire reason an error station exists.
+	{
+		const nameOf = (node, extra) => {
+			const trName = deriveTraceTree({
+				eventNodes: [Object.assign({ seq: 1, time: 1e12, turn: 1 }, node)],
+				requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+			}, t);
+			return stationAriaLabel(trName.stations[0], 1, 1, t);
+		};
+		const must = (label, node, needle) => {
+			const got = nameOf(node);
+			if (got.indexOf(needle) < 0) throw new Error("STATIONNAME1 " + label + ": expected to hear " + JSON.stringify(needle) + ", got " + JSON.stringify(got));
+		};
+		// A user turn's own words.
+		must("user text", { kind: "user", content: [{ type: "text", text: "把空格都压平" }] }, "把空格都压平");
+		// An error's message — the whole point of the station.
+		must("error message", { kind: "turn-error", message: "上游返回 429 限流" }, "上游返回 429 限流");
+		// A retry's failure reason.
+		must("retry reason", { kind: "model-retry", retry: 2, maxRetries: 5, failure: { message: "30s 后重试" } }, "30s 后重试");
+		// The assistant's first reply, NOT its hidden reasoning.
+		{
+			const got = nameOf({ kind: "assistant", step: 1, messageId: "m", blocks: [{ kind: "reasoning", text: "内部思考痕迹" }, { kind: "text", text: "好的我来处理" }] });
+			if (got.indexOf("好的我来处理") < 0) throw new Error("STATIONNAME1 step reply is not in the name: " + JSON.stringify(got));
+			if (got.indexOf("内部思考痕迹") >= 0) throw new Error("STATIONNAME1 hidden reasoning leaked into the name: " + JSON.stringify(got));
+		}
+		// An unknown event's type.
+		must("unknown type", { kind: "unknown", type: "brand-new-event" }, "brand-new-event");
+		// Long text must be capped — a pasted paragraph must not become the announcement.
+		{
+			const got = nameOf({ kind: "user", content: [{ type: "text", text: "长".repeat(500) }] });
+			if (got.length > 200) throw new Error("STATIONNAME1 a long message was not capped, name length " + got.length);
+			if (got.indexOf("…") < 0) throw new Error("STATIONNAME1 a capped excerpt is not marked with an ellipsis");
+		}
+		// Newlines must be flattened, not announced as runs of whitespace.
+		{
+			const got = nameOf({ kind: "user", content: [{ type: "text", text: "第一行\n\n\n第二行" }] });
+			if (got.indexOf("\n") >= 0) throw new Error("STATIONNAME1 the name still contains raw newlines");
+			if (got.indexOf("第一行 第二行") < 0) throw new Error("STATIONNAME1 newlines were not flattened: " + JSON.stringify(got));
+		}
+	}
+
 	// ── EXPORTDRIFT1: the saved file must carry the panel's warnings ───────────
 	// The header tells the reader "this log is damaged" (malformed / drift / invalid) and,
 	// since round 20, "N requests have no matching step". The Markdown export stated only
