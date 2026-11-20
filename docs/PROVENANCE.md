@@ -49,6 +49,8 @@
 - `test/browser/shots/screenshot-1795155941576.png`
 - `test/browser/shots/screenshot-1795155942686.png`
 - `test/browser/shots/screenshot-1795156006157.png`
+- `test/browser/shots/screenshot-1795157356099.png`
+- `test/browser/shots/screenshot-1795157357144.png`
 
 ## 二、`lib/client.js` 函数级
 
