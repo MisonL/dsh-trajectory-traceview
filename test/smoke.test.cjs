@@ -1881,6 +1881,66 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── BUTTONNAME1: no button may be named only by a glyph ────────────────────
+	// `title` does NOT name an element that has content: the name is computed from the
+	// descendants first, so a button whose children are "↑" announces "↑" and the tooltip
+	// only becomes a description. The search prev/next pair were the only two controls
+	// like that (the clear button and the follow toggle already carried aria-label).
+	//
+	// A static scan, because these render only while a query is active and a server render
+	// starts with an empty query — a rendered-HTML assertion here would be vacuous.
+	//
+	// HONEST LIMIT: this only analyses LITERAL children (a bare string, or `+`-joined
+	// string literals) and the aria-hidden icon-span pattern. A button whose label comes
+	// from `t(...)` or a prop identifier is not judged — that is text by construction.
+	{
+		const viewSrcBn = fs.readFileSync(path.join(__dirname, "..", "src", "40-view.js"), "utf8");
+		const offendersBn = [];
+		const glyphOnly = (text) => text !== "" && !/[A-Za-z0-9\u4e00-\u9fa5]/.test(text);
+		let fromBn = 0;
+		for (;;) {
+			const atBn = viewSrcBn.indexOf('jsx("button", {', fromBn);
+			if (atBn < 0) break;
+			let iBn = viewSrcBn.indexOf("{", atBn), depthBn = 0, endBn = -1;
+			for (; iBn < viewSrcBn.length; iBn += 1) {
+				const ch = viewSrcBn[iBn];
+				if (ch === '"' || ch === "'" || ch === "`") {
+					iBn += 1;
+					while (iBn < viewSrcBn.length && viewSrcBn[iBn] !== ch) { if (viewSrcBn[iBn] === "\\") iBn += 1; iBn += 1; }
+					continue;
+				}
+				if (ch === "{") depthBn += 1;
+				else if (ch === "}") { depthBn -= 1; if (depthBn === 0) { endBn = iBn; break; } }
+			}
+			if (endBn < 0) break;
+			const propsBn = viewSrcBn.slice(atBn, endBn + 1);
+			const lineBn = viewSrcBn.slice(0, atBn).split("\n").length;
+			fromBn = endBn + 1;
+			if (/aria-label/.test(propsBn)) continue;
+			const cIdx = propsBn.indexOf("children:");
+			if (cIdx < 0) continue;
+			const childExpr = propsBn.slice(cIdx + "children:".length);
+			// Icon pattern: an aria-hidden span whose own children are a glyph.
+			const iconLit = /jsx\(\s*"span"\s*,\s*\{[^}]*"aria-hidden"\s*:\s*"true"[^}]*children:\s*"((?:[^"\\]|\\.)*)"/.exec(childExpr);
+			if (iconLit !== null && glyphOnly(iconLit[1])) { offendersBn.push("line " + lineBn + " (icon span)"); continue; }
+			// Literal children: one string, or `+`-joined string literals only.
+			let litRun = "";
+			const litRe = /^\s*(?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*(?:\+\s*)?)+/;
+			if (litRe.test(childExpr)) {
+				const runMatch = childExpr.match(litRe)[0];
+				// Only accept it as "literal only" when the next meaningful char ends the props.
+				const afterRun = childExpr.slice(runMatch.length).trimStart();
+				if (afterRun === "" || afterRun[0] === "}" || afterRun[0] === ",") {
+					for (const m of runMatch.matchAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g)) litRun += m[0].slice(1, -1);
+					if (glyphOnly(litRun)) offendersBn.push("line " + lineBn + " (" + JSON.stringify(litRun) + ")");
+				}
+			}
+		}
+		if (offendersBn.length > 0) {
+			throw new Error("BUTTONNAME1 glyph-only button(s) with no aria-label at " + offendersBn.join(", "));
+		}
+	}
+
 	// ── STATIONNAME1: the accessible name must say WHAT the station is, not just its kind ──
 	// A station is a `role="option"`, and `aria-label` REPLACES the name computed from its
 	// descendants. The label used to be kind + position + meta only, so a screen-reader
