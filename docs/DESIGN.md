@@ -5114,3 +5114,65 @@ const found = requestsByStep.get(key);
 #### 未验证
 
 - 仍未跑真实浏览器。
+
+### 12.90 第二十一轮：读屏用户听每一条用户消息都是「1 / 12，用户」（2026-11-20）
+
+#### `aria-label` 会*取代*子节点的文本
+
+站点是 `role="option"`，容器是 `role="listbox"`。按 ARIA 的名字计算，`aria-label` 优先级高于"由后代内容计算"。所以一旦写了 `aria-label`，卡片里的正文就**不再是**这条 option 的名字。
+
+而原来的标签只有：
+
+```js
+const parts = [`${position} / ${total}`, kind];
+if (station.kind === "step" && ...) parts.push(`轮次 ${station.turn}`);
+if (meta !== "") parts.push(meta);
+if (station.hasError === true) parts.push(t("meta.error"));
+```
+
+实测：
+
+| 站点 | 听到的 |
+|---|---|
+| 用户消息 | `1 / 12，用户` |
+| 助手步骤 | `2 / 12，步骤 1，轮次 1，3 工具` |
+| 错误 | `3 / 12，错误，错误` |
+
+**每一条用户消息都念同一句话**，读者无法分辨哪条是哪条；错误站点说了两遍"错误"，从不说**什么**失败了——而错误信息正是这个站点存在的全部理由。
+
+#### 修法
+
+`stationExcerpt()` 取"这个站点自己的话"，压平换行、截断 80 字：
+
+| 类型 | 取自 |
+|---|---|
+| user | `text` |
+| error / retry | `message`（retry 是 `failure.message`） |
+| compaction | `summary` |
+| command | `name` + `args` |
+| unknown | `eventType`（来自 `n.type`） |
+| step | 第一条 assistant 正文，**跳过 thinking** |
+
+跳过 thinking 是刻意的：它本来就被折叠在 `<details>` 里，不该成为站点的名字。
+
+实测：
+
+```
+1 / 8，node.user，请把 这段话里的空格都压平
+2 / 8，node.step 1，node.turn 1，好的，我来处理
+6 / 8，node.error，meta.error，上游返回 429 限流
+7 / 8，retry，chip.retry · #2，上游 429，30s 后重试
+8 / 8，node.user，长×80…
+```
+
+#### 又是我自己的 fixture 错了两次
+
+跑变异时 `unknown` 用 `eventType:` 传参——实际读的是 `n.type`；`retry` 用 `message:` 传参——实际读的是 `n.failure.message`。两次都表现成"excerpt 没生效"，**两次都是我的数据错，不是产品错**。
+
+这已经是第四次同类（前三次见 §12.82 的 export fixture、§12.85 的 fuzz 池、§12.87 的空断言）。共同点：**先怀疑自己的探针，再怀疑产品。**
+
+#### 未验证
+
+- 真实读屏软件（NVDA / VoiceOver）没有跑过。这里验证的是名字的字符串内容，不是实际播报。
+- 80 字上限对中文约等于 80 个汉字，对英文约 80 个字符；未按语言分别调。
+- 仍未跑真实浏览器。
