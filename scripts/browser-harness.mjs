@@ -25,6 +25,25 @@ const MODULES = {
 	scheduler: "node_modules/scheduler/cjs/scheduler.development.js"
 };
 
+/**
+ * The host's REAL theme stylesheet, when the installed DSH can be found. It defines the
+ * `--dsw-static-*` palette plus `body` / `body[data-ds-dark-theme]` alias blocks, so both
+ * themes can be exercised faithfully. Without it the harness falls back to a handful of
+ * hand-written light values — good enough for layout, not for judging dark contrast.
+ */
+function findHostThemeCss() {
+	const npmRoot = process.env.DSH_THEME_CSS;
+	const candidates = [
+		npmRoot,
+		"/Users/mison/.nvm/versions/node/v24.22.1/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-theme/src/styles/design-platform.css"
+	].filter(Boolean);
+	for (const c of candidates) {
+		try { if (fs.statSync(c).size > 0) return fs.readFileSync(c, "utf8"); } catch { /* next */ }
+	}
+	return null;
+}
+const hostThemeCss = findHostThemeCss();
+
 const parts = [];
 for (const [id, rel] of Object.entries(MODULES)) {
 	const src = read(rel);
@@ -44,20 +63,22 @@ const html = `<!doctype html>
 	/* Stand-in for the host chrome, so the plugin's min-height / scroll containment is
 	   measured against a realistic page rather than an empty one. */
 	html, body { margin: 0; padding: 0; }
-	body { font: 13px/1.5 -apple-system, "PingFang SC", system-ui, sans-serif; background: #f5f6f8; }
+	/* The harness chrome follows the same theme attribute the host uses (on <body>), so a
+	   dark run does not measure the plugin's near-white text against a white seat. */
+	body { font: 13px/1.5 -apple-system, "PingFang SC", system-ui, sans-serif; background: var(--dsw-alias-bg-base, #f5f6f8); color: var(--dsw-alias-label-primary, #1b1f24); }
 	#hostHead { height: 120px; background: #1b1f24; color: #fff; padding: 10px 16px; box-sizing: border-box; }
 	#hostSidebar { position: fixed; left: 0; top: 0; bottom: 0; width: 0; }
 	#hostMain { padding: 12px 16px; box-sizing: border-box; }
-	#seat { border: 1px dashed #b3bac4; border-radius: 8px; background: #fff; margin-bottom: 12px; }
-	#hostComposer { position: fixed; left: 0; right: 0; bottom: 0; height: 96px; background: #eef1f5; border-top: 1px solid #cfd6df; padding: 10px 16px; box-sizing: border-box; }
-	/* The host's real token names (design-platform.css). Light values; the dark set is
-	   flipped by renderTheme(). */
-	:root {
+	#seat { border: 1px dashed var(--dsw-alias-border-l2, #b3bac4); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); margin-bottom: 12px; }
+	#hostComposer { position: fixed; left: 0; right: 0; bottom: 0; height: 96px; background: var(--dsw-alias-bg-layer-2, #eef1f5); border-top: 1px solid var(--dsw-alias-border-l2, #cfd6df); padding: 10px 16px; box-sizing: border-box; }
+	/* Host theme tokens: the real stylesheet when the installed DSH is readable,
+	   otherwise a minimal light set (layout only, not dark-contrast evidence). */
+	${hostThemeCss === null ? `:root {
 		--dsw-alias-bg-layer-1: #ffffff; --dsw-alias-bg-layer-2: #f2f4f7;
 		--dsw-alias-border-l2: #d8dee6; --dsw-alias-interactive-bg-hover: #edeff3;
 		--dsw-alias-label-primary: #1b1f24; --dsw-alias-label-secondary: #5b6472;
 		--dsw-alias-markdown-code-block: #f6f8fa;
-	}
+	}` : hostThemeCss}
 </style>
 </head>
 <body>
@@ -96,4 +117,5 @@ ${fixture}
 
 const out = path.join(root, "test/browser/harness.html");
 fs.writeFileSync(out, html);
-console.log("browser-harness: wrote " + path.relative(root, out) + " (" + (html.length / 1024).toFixed(0) + " KB)");
+console.log("browser-harness: wrote " + path.relative(root, out) + " (" + (html.length / 1024).toFixed(0) + " KB, host theme " +
+	(hostThemeCss === null ? "FALLBACK light only" : "loaded from the installed DSH") + ")");

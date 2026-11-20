@@ -144,7 +144,65 @@
 		info.detailScroll = { canScroll: body.scrollHeight > body.clientHeight + 1, movedTo: body.scrollTop };
 	}
 
-	// 8) tokens resolve (a missing host token silently kills the whole visual design)
+	// 8) contrast in BOTH themes, on composited backgrounds.
+	// Measuring a translucent tint against itself (or near-white text against the
+	// harness's own white seat) produced nonsense numbers twice; composite the real
+	// ancestor chain first. 4.5:1 is the WCAG AA floor for normal-size text.
+	const parseColor = (c) => {
+		let m = String(c).match(/rgba?\(([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:[,/ ]+([\d.]+))?/);
+		if (m) return { r: +m[1], g: +m[2], b: +m[3], a: m[4] === void 0 ? 1 : +m[4] };
+		m = String(c).match(/color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?/);
+		if (m) return { r: +m[1] * 255, g: +m[2] * 255, b: +m[3] * 255, a: m[4] === void 0 ? 1 : +m[4] };
+		return null;
+	};
+	const overOn = (top, bot) => ({ r: top.r * top.a + bot.r * (1 - top.a), g: top.g * top.a + bot.g * (1 - top.a), b: top.b * top.a + bot.b * (1 - top.a), a: 1 });
+	const bgOf = (el) => {
+		let acc = null;
+		for (let cur = el; cur !== null; cur = cur.parentElement) {
+			const p = parseColor(getComputedStyle(cur).backgroundColor);
+			if (p === null || p.a === 0) continue;
+			acc = acc === null ? p : overOn(acc, p);
+			if (acc.a >= 0.999) return acc;
+		}
+		const body = parseColor(getComputedStyle(document.body).backgroundColor) || { r: 255, g: 255, b: 255, a: 1 };
+		return acc === null ? body : overOn(acc, body);
+	};
+	const relLum = (c) => {
+		const f = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+		return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+	};
+	const ratioOf = (a, b) => { const l1 = relLum(a), l2 = relLum(b); const hi = Math.max(l1, l2), lo = Math.min(l1, l2); return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100; };
+	const contrastSweep = (label) => {
+		const rows = [];
+		for (const [sel, name] of [[".dstv_name", "station name"], [".dstv_hcard", "card text"], [".dstv_tag", "turn tag"], [".dstv_searchCount", "match counter"], [".dstv_dText", "detail text"], [".dstv_chip", "chip"], [".dstv_axLabel", "axis label"]]) {
+			const el = document.querySelector(sel);
+			if (el === null) continue;
+			const cs = getComputedStyle(el);
+			const fgRaw = parseColor(cs.color);
+			if (fgRaw === null || fgRaw.a === 0) continue;
+			const bg = bgOf(el);
+			const fg = fgRaw.a < 1 ? overOn(fgRaw, bg) : fgRaw;
+			rows.push({ name, ratio: ratioOf(fg, bg) });
+		}
+		for (const r of rows) {
+			if (r.ratio < 4.5) fail(label + ": " + r.name + " measures " + r.ratio + ":1 (WCAG AA needs 4.5)");
+		}
+		return rows;
+	};
+	if (typeof window.__setTheme === "function") {
+		window.__setTheme(false);
+		await tick(200);
+		info.contrastLight = contrastSweep("light theme").map((r) => r.ratio);
+		window.__setTheme(true);
+		await tick(200);
+		info.contrastDark = contrastSweep("dark theme").map((r) => r.ratio);
+		window.__setTheme(false);
+		await tick(200);
+	} else {
+		fail("the harness cannot switch themes");
+	}
+
+	// 9) tokens resolve (a missing host token silently kills the whole visual design)
 	const rootStyle = getComputedStyle(document.querySelector(".dstv_root"));
 	const missingVars = ["--dsw-alias-border-l2", "--dsw-alias-label-primary", "--dsw-alias-bg-layer-1"]
 		.filter((v) => rootStyle.getPropertyValue(v).trim() === "");

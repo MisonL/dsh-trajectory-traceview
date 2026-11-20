@@ -132,6 +132,12 @@
 	window.__render();
 
 	/* ---- helpers the tests drive from outside ---- */
+	/** Host theme switch, on the SAME element the host uses (<body>). */
+	window.__setTheme = function (dark) {
+		if (dark === true) document.body.setAttribute("data-ds-dark-theme", "true");
+		else document.body.removeAttribute("data-ds-dark-theme");
+		return document.body.hasAttribute("data-ds-dark-theme");
+	};
 	window.__h = {
 		setNodes: function (nodes) { store.set(Object.assign({}, store.value, { eventNodes: nodes })); },
 		setSnap: function (patch) { store.set(Object.assign({}, store.value, patch)); },
