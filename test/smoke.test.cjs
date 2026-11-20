@@ -4465,6 +4465,13 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		];
 		const folded = deriveTraceTree({ eventNodes: nodesDup, requests: reqs, callSchemas: new Map(), runningCalls: [], partial: null }, t);
 		if (folded.unplacedRequests !== 1) throw new Error("LOSS1 duplicate turn:step requests: expected 1 unplaced, got " + folded.unplacedRequests);
+		// WHICH attempt wins matters. The original `Map.set` kept the LAST one, so a step
+		// that failed then succeeded must show "ok" — not the stale error from attempt 1.
+		const stepStation = folded.stations.find((x) => x.kind === "step");
+		if (stepStation === void 0 || stepStation.request === null || stepStation.request.status !== "ok") {
+			throw new Error("LOSS1 the step must display the latest attempt (ok), got " +
+				(stepStation && stepStation.request ? stepStation.request.status : "no request"));
+		}
 	}
 	// (b) two DISTINCT tool-call blocks with the same callId in one turn.
 	// The old Set-based dedupe was "first wins": the second call disappeared entirely.

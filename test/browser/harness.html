@@ -36655,9 +36655,11 @@ window.__ModuleLoader__.load({
 						// attach request info (messages are reconstructed lazily in the component)
 						const key = `${e.turn}:${piece.stepNum}`;
 						const bucket = requestsByStep.get(key);
-						// Every request in the bucket is a real record. Consume the earliest and
-						// let the unplaced accounting report any remainder.
-						const found = bucket === void 0 ? void 0 : bucket.shift();
+						// Every request in the bucket is a real record. Consume the LATEST one:
+						// the original `Map.set` kept the last attempt, so a step retried after a
+						// failure showed the final (successful) status. Taking the earliest here
+						// silently flipped such a step back to "error". Leftovers still get counted.
+						const found = bucket === void 0 ? void 0 : bucket.pop();
 						let request = null;
 						if (found !== void 0) {
 							const r = found.req;
