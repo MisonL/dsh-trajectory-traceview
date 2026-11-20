@@ -372,6 +372,14 @@
 		}
 		function safeJsonPreview(value, limit, indent) {
 			let text = "";
+			// "Nothing recorded" must render as nothing. `JSON.stringify(null)` is the string
+			// "null", so an unknown event with no payload showed the literal word "null" in
+			// the panel — the same confusion the "undefined" case had. Callers already test
+			// for `""`, so returning "" keeps the empty branch working.
+			if (value === null || value === void 0) return "";
+			// `JSON.stringify(NaN)` and of `Infinity` are both the string "null", so a
+			// non-finite number payload rendered the literal word "null" too.
+			if (typeof value === "number" && !Number.isFinite(value)) return "";
 			if (typeof value === "string") text = value;
 			else {
 				// `indent` is only for the request tab, which shows the payload pretty-printed.
@@ -1401,7 +1409,13 @@
 					}
 					e.stations.push({
 						id: `m${n.seq}`, kind: "compaction", time: n.time, seq: n.seq,
-						summary: asText(n.summary), count: n.shadowedItemCount ?? null, tokens: n.shadowedTokenCount ?? null,
+						summary: asText(n.summary),
+						// Raw values here reached a template literal (`${station.count}`), which
+						// calls ToString and THROWS on a Symbol — the step-copy Markdown took the
+						// whole render down. Non-integers become null, which the callers already
+						// treat as "not recorded".
+						count: Number.isSafeInteger(n.shadowedItemCount) ? n.shadowedItemCount : null,
+						tokens: Number.isSafeInteger(n.shadowedTokenCount) ? n.shadowedTokenCount : null,
 						crequest,
 						label: t("node.compaction")
 					});
@@ -1409,15 +1423,15 @@
 					const e = ensureTurn(typeof n.turn === "number" ? n.turn : 0, n.seq);
 					e.stations.push({
 						id: `e${n.seq}`, kind: "error", time: n.time, seq: n.seq,
-						message: asText(n.message), code: n.code, label: t("node.error")
+						message: asText(n.message), code: typeof n.code === "string" ? n.code : void 0, label: t("node.error")
 					});
 				} else if (n.kind === "model-retry") {
 					const e = ensureTurn(typeof n.turn === "number" ? n.turn : 0, n.seq);
 					e.stations.push({
 						id: `y${n.seq}`, kind: "retry", time: n.time, seq: n.seq,
-						message: asText(n.failure?.message), code: n.failure?.code,
-						retry: n.retry, maxRetries: n.maxRetries, provider: n.provider,
-						retryState: n.retryState, label: t("node.retry")
+						message: asText(n.failure?.message), code: typeof n.failure?.code === "string" ? n.failure.code : void 0,
+						retry: n.retry, maxRetries: n.maxRetries, provider: asText(n.provider),
+						retryState: asText(n.retryState), label: t("node.retry")
 					});
 				} else if (n.kind === "turn-max-tokens") {
 					const e = ensureTurn(typeof n.turn === "number" ? n.turn : 0, n.seq);
@@ -2024,7 +2038,11 @@
 		 * Escaping only the dangerous characters keeps the text readable.
 		 */
 		function proseSafe(content) {
-			return String(content ?? "")
+			// `String(Symbol)` throws. Prose normally IS a string, but this is the choke point
+			// every text block passes through, so it must not be the one place that can take
+			// the render down; `asText` also turns an object into its JSON instead of
+			// "[object Object]".
+			return asText(content)
 				.replace(/`{3,}/g, (run) => "\\`".repeat(run.length))
 				.replace(/<(\/?)(details)\b/gi, "&lt;$1$2");
 		}

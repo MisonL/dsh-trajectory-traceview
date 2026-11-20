@@ -1895,6 +1895,116 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── RENDERFUZZ1: hostile snapshots must not crash or leak into the rendered panel ──
+	// The Markdown paths got their own sweep (EXPORTLEAK1), but the PANEL is the primary
+	// surface and had only ever been rendered from clean fixtures. Sweeping it with the
+	// same hostile pool found, in order:
+	//   Cannot mix BigInt and other types     — `curEdge - prevEdge` in the gap band
+	//   Cannot convert a Symbol value to a …  — `t${callId}` cell ids, `String(Symbol)` in
+	//                                           proseSafe / template literals, and
+	//                                           provider / retryState / count rendered raw
+	//   title="null">null                     — a NaN payload (JSON.stringify → "null")
+	// Each was a whole-panel blank: React renders nothing once a component throws.
+	{
+		const srcRf = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const rtRf = require("react/jsx-runtime");
+		const boxRf = {
+			console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date,
+			RegExp, isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise, Intl,
+			react: require("react"), jsx: rtRf.jsx, jsxs: rtRf.jsx, fragment: rtRf.Fragment,
+			document: void 0, window: void 0, location: void 0
+		};
+		boxRf.globalThis = boxRf;
+		vm.createContext(boxRf);
+		const hRf = srcRf.indexOf("//#region pure helpers: snapshot -> timeline tree");
+		const hRfEnd = srcRf.indexOf("//#endregion", hRf);
+		const cRf = srcRf.indexOf("//#region horizontal timeline + replay component");
+		const cRfEnd = srcRf.indexOf("//#endregion", cRf);
+		vm.runInContext("const fragment = react.Fragment;\n" + srcRf.slice(hRf, hRfEnd) + "\n" + srcRf.slice(cRf, cRfEnd) + ";globalThis.__rf={TraceMapView};", boxRf, { timeout: 60000 });
+		const renderRf = require("react-dom/server").renderToStaticMarkup;
+		let seedRf = 771122;
+		const rndRf = () => { seedRf = (seedRf * 1103515245 + 12345) & 0x7fffffff; return seedRf / 0x7fffffff; };
+		const pickRf = (arr) => arr[Math.floor(rndRf() * arr.length)];
+		const badRf = () => pickRf([null, void 0, 0, -1, NaN, Infinity, "", "x", true, Symbol("s"), 5n, {}, []]);
+		const kindsRf = ["user", "assistant", "tool-result", "compaction", "turn-error", "model-retry", "turn-max-tokens", "command", "unknown", "context", "steering", "bogus"];
+		const leaksRf = new Set();
+		let crashRf = null;
+		for (let round = 0; round < 40 && crashRf === null; round += 1) {
+			const nodesRf = Array.from({ length: 1 + Math.floor(rndRf() * 6) }, (_, i) => ({
+				kind: pickRf(kindsRf),
+				seq: rndRf() < 0.4 ? badRf() : i + 1, time: rndRf() < 0.4 ? badRf() : 1e12,
+				turn: rndRf() < 0.3 ? badRf() : 1, step: rndRf() < 0.3 ? badRf() : 1,
+				messageId: rndRf() < 0.5 ? "m" : badRf(), callId: rndRf() < 0.6 ? "c" : badRf(),
+				blocks: rndRf() < 0.3 ? badRf() : [{ kind: pickRf(["text", "reasoning", "tool-call", "other", "image", "bogus"]), text: rndRf() < 0.3 ? badRf() : "T", name: rndRf() < 0.3 ? badRf() : "n", argsRaw: rndRf() < 0.3 ? badRf() : "{}", callId: rndRf() < 0.6 ? "c" : badRf(), thinking: rndRf() < 0.3 ? badRf() : "th" }],
+				content: rndRf() < 0.3 ? badRf() : [{ type: "text", text: rndRf() < 0.3 ? badRf() : "C" }],
+				summary: rndRf() < 0.4 ? badRf() : "S", message: rndRf() < 0.4 ? badRf() : "M", type: rndRf() < 0.4 ? badRf() : "t",
+				data: rndRf() < 0.4 ? badRf() : { k: 1 }, name: rndRf() < 0.4 ? badRf() : "nm", args: rndRf() < 0.4 ? badRf() : "a",
+				outcomeText: rndRf() < 0.4 ? badRf() : "o", failure: rndRf() < 0.4 ? badRf() : { message: "f", code: "c" },
+				retry: rndRf() < 0.3 ? badRf() : 1, maxRetries: rndRf() < 0.3 ? badRf() : 3, commandId: rndRf() < 0.6 ? "cmd" : badRf(),
+				count: rndRf() < 0.4 ? badRf() : 4, tokens: rndRf() < 0.4 ? badRf() : 5,
+				shadowedItemCount: rndRf() < 0.4 ? badRf() : 3, shadowedTokenCount: rndRf() < 0.4 ? badRf() : 9,
+				usage: rndRf() < 0.4 ? badRf() : { input: 3, output: 2 },
+				timing: rndRf() < 0.4 ? badRf() : { stepStartTime: 1e12, completedTime: 1e12 + 50 },
+				provider: rndRf() < 0.4 ? badRf() : void 0, retryState: rndRf() < 0.4 ? badRf() : void 0, code: rndRf() < 0.4 ? badRf() : void 0
+			}));
+			const requestsRf = rndRf() < 0.3 ? [] : [{
+				purpose: pickRf(["assistant", "compaction", "x"]), turn: rndRf() < 0.3 ? badRf() : 1, step: 1,
+				startSeq: rndRf() < 0.3 ? badRf() : 1, status: pickRf(["ok", "error"]),
+				requestConfig: { model: rndRf() < 0.3 ? badRf() : "m", provider: rndRf() < 0.3 ? badRf() : "p" },
+				usage: rndRf() < 0.3 ? badRf() : { input: 1, output: 2 },
+				startedAt: rndRf() < 0.3 ? badRf() : 1e12, completedAt: rndRf() < 0.3 ? badRf() : 1e12 + 9,
+				prompt: rndRf() < 0.4 ? badRf() : { system: "s", tools: [{ name: "bash" }] },
+				retry: rndRf() < 0.4 ? badRf() : 1, maxRetries: rndRf() < 0.4 ? badRf() : 3,
+				error: rndRf() < 0.4 ? badRf() : { name: "E", message: "m" }
+			}];
+			try {
+				const htmlRf = renderRf(rtRf.jsx(boxRf.__rf.TraceMapView, {
+					useSession: (sel) => { try { return sel({ openState: pickRf(["open", "loading", "closed"]), hasMore: rndRf() < 0.5 }); } catch { return void 0; } },
+					useTrajectory: () => ({ eventNodes: nodesRf, requests: requestsRf, callSchemas: rndRf() < 0.3 ? badRf() : {}, runningCalls: rndRf() < 0.3 ? badRf() : {}, partial: null }),
+					t: (k) => k, viewRequest: rndRf() < 0.3 ? { focus: pickRf(["e1", "c1", "bogus", 123]) } : null,
+					completeViewRequest: () => {}, loadOlder: async () => false
+				}));
+				for (const needle of [">undefined<", ">NaN<", ">Infinity<", ">null<", "[object Object]"]) {
+					if (htmlRf.indexOf(needle) >= 0) leaksRf.add(needle);
+				}
+			} catch (e) {
+				crashRf = e.constructor.name + ": " + String(e.message).slice(0, 70);
+			}
+		}
+		// Deterministic single-station renders. In the random loop the DETAIL panel only
+		// shows the LAST station (overview selects the newest), so a hostile retry /
+		// compaction had to land last by chance — the `provider` mutation stayed green
+		// until these were added.
+		const drawOne = (node) => renderRf(rtRf.jsx(boxRf.__rf.TraceMapView, {
+			useSession: (sel) => { try { return sel({ openState: "open", hasMore: false }); } catch { return void 0; } },
+			useTrajectory: () => ({ eventNodes: [Object.assign({ seq: 1, time: 1e12, turn: 1 }, node)], requests: [], callSchemas: {}, runningCalls: {}, partial: null }),
+			t: (k) => k, viewRequest: null, completeViewRequest: () => {}, loadOlder: async () => false
+		}));
+		const symR = Symbol("s");
+		const fixed = [
+			["a retry with Symbol text fields", { kind: "model-retry", retry: 1, maxRetries: 3, provider: symR, retryState: symR, failure: { message: "f", code: symR } }],
+			["a compaction with Symbol counters", { kind: "compaction", summary: "s", shadowedItemCount: symR, shadowedTokenCount: symR }],
+			["an error with a Symbol code", { kind: "turn-error", message: "m", code: symR }],
+			["a command with Symbol name/args", { kind: "command", name: symR, args: symR, outcomeText: symR }],
+			["an unknown event with a NaN payload", { kind: "unknown", type: "t", data: NaN }],
+			["a BigInt timestamp", { kind: "user", time: 5n, content: [{ type: "text", text: "c" }] }],
+			["a Symbol timestamp", { kind: "user", time: symR, content: [{ type: "text", text: "c" }] }]
+		];
+		for (const [label, node] of fixed) {
+			let htmlOne = null;
+			try { htmlOne = drawOne(node); } catch (e) {
+				throw new Error("RENDERFUZZ1 " + label + " crashed the panel render — " + e.constructor.name + ": " + String(e.message).slice(0, 60));
+			}
+			for (const needle of [">undefined<", ">NaN<", ">Infinity<", ">null<", "[object Object]"]) {
+				if (htmlOne.indexOf(needle) >= 0) {
+					throw new Error("RENDERFUZZ1 " + label + " printed " + needle);
+				}
+			}
+		}
+		if (crashRf !== null) throw new Error("RENDERFUZZ1 a hostile snapshot crashed the panel render — " + crashRf);
+		if (leaksRf.size > 0) throw new Error("RENDERFUZZ1 the panel printed literal junk: " + [...leaksRf].join(", "));
+	}
+
 	// ── EXPORTLEAK1: no "undefined / NaN / Infinity / [object Object]" in the output ──
 	// A hostile-snapshot sweep of the Markdown paths found four kinds of leak that the
 	// earlier fuzz never looked for, because it only asserted "does not throw":

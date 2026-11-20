@@ -1440,7 +1440,11 @@
 										: prevStation.startMs != null ? prevStation.startMs
 										: prevStation.time != null ? prevStation.time : null;
 									const curEdge = s.startMs != null ? s.startMs : s.time != null ? s.time : null;
-									const gapMs = prevEdge !== null && curEdge !== null ? curEdge - prevEdge : null;
+									// `time` comes from the log. A BigInt makes `curEdge - prevEdge` throw
+									// ("Cannot mix BigInt and other types") and a Symbol throws too, so one
+									// damaged timestamp took down the whole timeline render. `Number.isFinite`
+									// is false for both without throwing.
+									const gapMs = Number.isFinite(prevEdge) && Number.isFinite(curEdge) ? curEdge - prevEdge : null;
 									const showGap = gapMs !== null && gapMs >= GAP_MIN_MS;
 									// T2: in clock mode the idle band is widened in proportion to real
 									// elapsed time (log-scaled and capped), so a long pause looks long.
