@@ -6008,3 +6008,51 @@ B) 同一 turn 两条 tool-call 用同一 callId → 只剩 1 个 cell，name = 
 ```
 LOSS1 the step must display the latest attempt (ok), got error
 ```
+
+### 13.12 独立猎取（我的那份）：`reconstructMessages` 的 `seq===null` 会越过 request 窗口头（2026-11-20）
+
+我这轮没干等 Codex，自己也并行做了一次独立缺陷猎取，针对此前记录过的"已知缺口"。实测探针：
+
+```
+beforeSeq=4，节点 seq=[1,3,5,null]
+→ 保留：one(1), three(3), unknown-pos(null)   ← seq=null 的块越过了窗口头
+→ five(5) 被正确过滤
+```
+
+请求页签用 `reconstructMessages(tree.nodes, activeReqStartSeq, t)` 重建"该请求前"的消息（40-view.js L889）。`seq===null` 的块**无法定位**，当前逻辑却把它算在窗口内——既可能跨会话泄漏（null 到底是更早还是当前的不知道），也可能让导出/请求页多一段语义上不属于这一块的内容。
+
+这跟"越界 five 被正确过滤"是同一枚硬币的两面：**有界的块被严格过滤，无界的块反而全放行**。确认是真缺口，不是误读。
+
+### 13.13 Codex 独立缺陷猎取：11 条，我逐条复现后**全部成立**（2026-11-20）
+
+§13.10 之后我请 Codex 做了一次**独立**审计——故意不给它我自己的已知清单，只给背景与四类目标（静默丢数据 / 说谎的界面 / 崩溃白屏 / 可访问性），要求每条附可复现证据、确认与疑似分开计数。
+
+它报了 **10 条确证 + 2 条疑似**。按规矩我没有直接采纳，而是自己写探针逐条复现（`/tmp/verify-codex.cjs`，从 `lib/client.js` 抽 helpers region 直接跑）：
+
+| # | 严重度 | 问题 | 我的复现 |
+|---|---|---|---|
+| 1 | 高 | `reconstructMessages` 遇到 `blocks:[null]` 抛 `TypeError: Cannot read properties of null` | **确证** |
+| 2 | 高 | 导出 `buildTraceMarkdown` 遇到 `prompt.tools:[null]` 抛 `Cannot read properties of null (reading 'name')` | **确证** |
+| 3 | 高 | `requests.sort((a,b)=>a.startSeq-b.startSeq)` 遇 Symbol/BigInt `startSeq` 抛 `Cannot convert a Symbol value to a number` | **确证** |
+| 4 | 高 | 没有对应 marker 的 compaction request 被静默丢弃（`stations=0, unplacedRequests=0`） | **确证** |
+| 5 | 中 | 只读 `requestConfig.model`／`provenance.model`，当前契约字段是 `providerMetadata.model` → model 静默消失 | **确证**（两者皆 null） |
+| 6 | 中 | orphan tool-result 在 `call === null` 时丢掉 `n.name`（契约里 `name` 恒存在） | **确证**（name 退化成"工具"） |
+| 7 | 中 | sub-call 导出 `split("\n")[0].slice(0,160)` 无截断标记 → 500 字符只剩 160 | **确证** |
+| 8 | 中 | KPI 不累加 assistant node 自带 usage → detail 显示 10/7，overview 全 0 | **确证** |
+| 9 | 中 | partial 多个 text block 只留第一段（`existingKinds` 按 kind 去重） | **确证**（A 留下，B 消失） |
+| 10 | 中 | 非字符串 `callId` 的 tool-result 既不入索引也不进 orphan → 直接消失且不计 invalid | **确证** |
+| S2 | 疑似 | 重复 orphan callId → 相同 station id（`["otdup","otdup"]`，React key 冲突） | **确证** |
+
+唯一未被它列为确证的是 S1（子调用 error 是否该提升 step/KPI 状态）——那确实是个产品定义问题，不算缺陷。
+
+#### 我自己的判定脚本也错了一次
+
+第一版 `verify-codex.cjs` 里，判定回调返回的 `"确证：…"` 字符串被我的分类逻辑当成了 `REFUTED`，于是输出「确证 3 / 反驳 8」——**与事实相反**。改成返回 `{ok, detail}` 结构后重跑才是上面的 11/11。
+
+**教训**：验证脚本本身也需要被验证。第一次跑出的"反驳 8 条"如果直接报出去，会得出"Codex 一半是错的"这个完全相反的结论。
+
+#### 对这轮工作的影响
+
+③ 里我判断"清单本身有错、只有 `shadowedTokenCount` 缺守卫"——那是针对**我自己的**旧清单。Codex 这份是全新角度，覆盖面明显更宽（它去核对了 DSH 0.2.2-rc.2 的真实 `.d.ts` 契约字段，例如 `providerMetadata.model`、`ToolResultNode.name` 恒存在）。
+
+这些缺陷**尚未修复**，单独排期。
