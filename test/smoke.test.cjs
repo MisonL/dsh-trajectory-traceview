@@ -1881,6 +1881,66 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── NOPAGER1: no paging affordance without a paging callback ───────────────
+	// `hasMore` is a property of the SESSION; it says nothing about whether this view was
+	// handed a way to fetch. The slot's `inject` returns `{}` when the session binding is
+	// gone, so `loadOlder` can be absent while `hasMore` is still true. The button was
+	// rendered ENABLED and did provably nothing (`doLoadOlder` bails out silently), and
+	// the search-scope chip advertised "click here to load earlier history" while being
+	// unclickable.
+	{
+		let ReactPg = null;
+		let rtPg = null;
+		try { ReactPg = require("react"); rtPg = require("react/jsx-runtime"); } catch { ReactPg = null; }
+		if (ReactPg === null) {
+			console.log("NOPAGER1 SKIPPED: react / react/jsx-runtime not installed");
+		} else {
+			const srcPg = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+			const vmPg = require("node:vm");
+			const boxPg = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
+				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
+				react: ReactPg, jsx: rtPg.jsx, jsxs: rtPg.jsx, fragment: rtPg.Fragment,
+				document: void 0, window: void 0, location: void 0 };
+			boxPg.globalThis = boxPg;
+			vmPg.createContext(boxPg);
+			const hPg = srcPg.indexOf("//#region pure helpers: snapshot -> timeline tree");
+			const hEndPg = srcPg.indexOf("//#endregion", hPg);
+			const cPg = srcPg.indexOf("//#region horizontal timeline + replay component");
+			const cEndPg = srcPg.indexOf("//#endregion", cPg);
+			vmPg.runInContext("const fragment = react.Fragment;\n" + srcPg.slice(hPg, hEndPg) + "\n" + srcPg.slice(cPg, cEndPg) + ";globalThis.__pg={TraceMapView};", boxPg, { timeout: 60000 });
+			const pgSnap = { eventNodes: [{ kind: "user", seq: 1, time: 1e12, turn: 1, content: [{ type: "text", text: "u" }] }], requests: [], callSchemas: {}, runningCalls: {}, partial: null };
+			const draw = (loader) => require("react-dom/server").renderToStaticMarkup(rtPg.jsx(boxPg.__pg.TraceMapView, {
+				useSession: (sel) => { try { return sel({ openState: "open", hasMore: true }); } catch { return void 0; } },
+				useTrajectory: () => pgSnap,
+				t: (k) => k,
+				viewRequest: null,
+				completeViewRequest: () => {},
+				loadOlder: loader
+			}));
+			// With a loader the header button exists and is clickable.
+			const withFn = draw(async () => false);
+			const fnTag = (withFn.match(/<button[^>]*class="dstv_btn"[^>]*>⬆[^<]*/) ?? [""])[0];
+			if (fnTag === "") throw new Error("NOPAGER1 the paging button disappeared even with a loader");
+			if (fnTag.indexOf("disabled") >= 0) throw new Error("NOPAGER1 the paging button is disabled although a loader exists");
+			// Without one it must not be a clickable dead control.
+			for (const missing of [void 0, null, "nope", 0]) {
+				const html = draw(missing);
+				const tag = (html.match(/<button[^>]*class="dstv_btn"[^>]*>⬆[^<]*/) ?? [""])[0];
+				if (tag !== "" && tag.indexOf("disabled") < 0) {
+					throw new Error("NOPAGER1 a clickable paging button is rendered with loadOlder=" + String(missing));
+				}
+			}
+			// The scope chip only renders while a query is active, and a static render starts
+			// with an empty query — so a rendered-HTML assertion here would be VACUOUS (the
+			// markup is simply absent and `indexOf` on "" is -1). Check the branch structure
+			// instead: without a loader the chip must be a `span`, not a disabled `button`
+			// whose tooltip promises a click it cannot perform.
+			if (srcPg.indexOf('}, "sScope") : jsx("span", {') < 0) {
+				throw new Error("NOPAGER1 the search-scope chip has no non-button branch without a loader");
+			}
+		}
+	}
+
 	// ── HOSTILEFIELDS1: 1000 rounds of non-serialisable garbage must not throw ──
 	// The six-round fuzz only produced JSON-representable values, so BigInt, Symbol and
 	// functions were never exercised — which is exactly where two real crashes lived

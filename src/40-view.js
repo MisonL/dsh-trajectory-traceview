@@ -849,8 +849,15 @@
 			};
 
 			// ── load older history ────────────────────────────────────────────────
+			// `hasMore` says the SESSION has older history; it says nothing about whether
+			// this view was handed a way to fetch it. The slot's `inject` returns `{}` when
+			// the session binding is gone, so `loadOlder` can legitimately be absent while
+			// `hasMore` is still true — and the button was rendered ENABLED and did nothing
+			// at all when pressed, because `doLoadOlder` bails out silently. A control that
+			// looks clickable and provably cannot act is worse than no control.
+			const canPage = typeof loadOlder === "function";
 			const doLoadOlder = () => {
-				if (typeof loadOlder !== "function" || olderBusy === true || loadingOlder) return;
+				if (!canPage || olderBusy === true || loadingOlder) return;
 				setOlderBusy(true);
 				setOlderNote(null);
 				Promise.resolve()
@@ -985,7 +992,7 @@
 						type: "button",
 						className: "dstv_btn",
 						title: t("action.loadOlder"),
-						disabled: olderBusy === true || loadingOlder,
+						disabled: !canPage || olderBusy === true || loadingOlder,
 						onClick: doLoadOlder,
 						children: olderBusy === true || loadingOlder ? `⏳ ${t("action.loadingOlder")}` : `⬆ ${t("action.loadOlder")}`
 					}, "hOlder") : null,
@@ -1103,14 +1110,23 @@
 								"aria-atomic": "true",
 								children: matches.length === 0 ? t("search.none") : `${Math.min(matchPtr + 1, matches.length)}/${matches.length} ${t("search.matches")}`
 							}, "sCnt") : null,
-							searching && scopeNote !== null ? jsx("button", {
+							// Without a loader this must be a NOTICE, not a disabled button:
+							// the tooltip says "click here to load earlier history", which a
+							// disabled control cannot honour. The warning itself still matters
+							// (the search really is limited to the loaded range), so keep the
+							// text and drop only the affordance.
+							searching && scopeNote !== null ? (canPage ? jsx("button", {
 								type: "button",
 								className: "dstv_scope",
 								title: t("search.scopeTip"),
 								disabled: olderBusy === true || loadingOlder,
 								onClick: doLoadOlder,
 								children: `⬆ ${scopeNote}`
-							}, "sScope") : null,
+							}, "sScope") : jsx("span", {
+								className: "dstv_scope",
+								title: t("search.scopeTip"),
+								children: `⬆ ${scopeNote}`
+							}, "sScope")) : null,
 							searching && matches.length > 0 ? jsx("button", { type: "button", className: "dstv_sbtn", title: t("action.searchPrev"), onClick: () => gotoMatch(-1), children: "↑" }, "sPrev") : null,
 							searching && matches.length > 0 ? jsx("button", { type: "button", className: "dstv_sbtn", title: t("action.searchNext"), onClick: () => gotoMatch(1), children: "↓" }, "sNext") : null,
 							searching ? jsx("button", { type: "button", className: "dstv_sbtn", title: t("action.searchClear"), "aria-label": t("action.searchClear"), onClick: clearSearch, children: jsx("span", { "aria-hidden": "true", children: "✕" }, "sClrIc") }, "sClr") : null
