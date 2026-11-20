@@ -5312,3 +5312,63 @@ if (typeof text !== "string") text = String(text);
 
 - 中文/英文 locale 下这个占位符没有单独翻译（`[function]` / `[symbol]` 是代码里的字面量）。**已知取舍**，因为它们是技术标识而非文案。
 - 仍未跑真实浏览器。
+
+### 12.94 第二十三轮补：「NaN」「Infinity」「[object Object]」被印进导出（2026-11-20）
+
+#### 只测「不抛」等于只测了一半
+
+之前的恶意快照 fuzz 只断言**不抛异常**。这一轮同时扫两个维度——**崩溃**和**字面垃圾词**——立刻两类都命中。
+
+**两处仍在的 Symbol 崩溃：**
+
+| 位置 | 原因 |
+|---|---|
+| `id: \`t${b.callId}\`` | callId 是 Symbol 时模板字符串抛（cell id 同时是 React key，整条投影挂掉） |
+| `asText(Symbol)` → `safeJsonPreview` | 已在上轮修好，这里随之消失 |
+
+**五处文本泄漏：**
+
+| 出现 | 来源 |
+|---|---|
+| `## 轮次 NaN` | `String(n.turn)`，turn 是 NaN/Infinity |
+| `↻ 重试 (#1/Infinity)` | 重试计数直接插值 |
+| `♺ 压缩 _([object Object] …)` | `count` 是对象 |
+| `### ⚡ /undefined` | 命令名回退 `` `/${n.commandId}` `` |
+| `asText(NaN)` → `"NaN"` | 非有限数字被 `String()` 化 |
+
+#### 修法
+
+```js
+// 字符串 callId 原样保留（锚点 tvp1:c<callId> 要它），其余用站内序号
+const cellId = (prefix, callId, ordinal) =>
+    `${prefix}${typeof callId === "string" ? callId : `?${String(ordinal)}`}`;
+
+// 非安全整数显示 "?"
+function numOr(v, fallback) { return Number.isSafeInteger(v) ? String(v) : (fallback ?? "?"); }
+```
+
+`asText` 对非有限数字返回空串，不再返回 `"NaN"` / `"Infinity"`。命令名回退、retry 计数、compaction 计数、以及那些 `!= null` 判断一并收紧为 `Number.isSafeInteger`。
+
+修完复跑 200 轮：**崩溃 0、泄漏 0**。
+
+#### 守卫的弱点被自己的变异测试抓出来
+
+`EXPORTLEAK1` 先只做 120 轮随机快照。变异测试把 `cellId` 的防护去掉后——**仍然绿**。
+
+原因：随机池里 Symbol `callId` 的命中率约 0.6%/节点，120 轮根本不够。
+
+补了 4 个确定性用例后它才变红：
+
+| 固定用例 | 变异后 |
+|---|---|
+| Symbol tool-call id | 红 `Cannot convert a Symbol value to a string` |
+| Symbol running call id | — |
+| NaN turn | 红 `a NaN turn still renders as NaN` |
+| Infinity retry count | — |
+
+**随机 fuzz 抓不住低频字段。每个已知崩溃点都要有一条固定用例。** 这条和 §12.85 的「池子太温和」是同一个教训的第二次，但这次是我自己刚写好的守卫在同一次会话里被抓出来。
+
+#### 未验证
+
+- 灌进去的是构造快照，"turn 真的是 NaN"这种日志在真实会话里怎么产生，没有确认。
+- 仍未跑真实浏览器。
