@@ -259,6 +259,183 @@
 			} catch { /* storage disabled or full: behave exactly as before */ }
 		}
 
+		function stationCardBody(s, cardKey, t, fmtClock) {
+			if (s.kind === "user") {
+				return jsxs("div", {
+					className: "dstv_hcard userCard",
+					children: [
+						jsx("span", { className: "dstv_name", children: s.who }, "uName"),
+						s.time != null ? jsx("span", { className: "dstv_spanRow", children: jsx("span", { className: "dstv_spanEdge", children: fmtClock(s.time) }, "uClk") }, "uSpan") : null,
+						jsx("div", { className: "dstv_text dstv_clamp3", title: s.text, children: s.text || "…" }, "uText")
+					]
+				}, cardKey);
+			}
+			if (s.kind === "step") {
+				return jsxs("div", {
+					className: `dstv_hcard ${s.hasError ? "stepCardErr" : "stepCardOk"}`,
+					children: [
+						jsxs("span", {
+							className: "dstv_name",
+							children: [
+								s.live === true ? jsx("i", { className: "dstv_dot", "data-live": true }, "stIcon") : s.hasError ? jsx("span", { className: "dstv_bad", "aria-hidden": "true", children: "✗" }, "stIcon") : jsx("span", { className: "dstv_ok", "aria-hidden": "true", children: "✓" }, "stIcon"),
+								jsx("span", { className: "dstv_nameText", children: s.label }, "stLbl"),
+								jsx("span", { className: "dstv_chips", children: s.meta.map((m, i) => jsx("span", { className: "dstv_chip", title: m, children: m }, `sm${i}`)) }, "stChips")
+							]
+						}, "stName"),
+						// G4-T1: exact span. Per spec, a missing edge shows only the edge
+						// that exists — never a fabricated 00:00:00, and never a bogus
+						// end time for a step that is still running.
+						s.startMs != null || s.endMs != null || s.live === true
+							? jsx("div", {
+								className: "dstv_spanRow",
+								title: `${t("detail.start")} → ${t("detail.end")}`,
+								children: jsxs(fragment, { children: [
+									s.startMs != null ? jsx("span", { className: "dstv_spanEdge", children: fmtClock(s.startMs) }, "sp0") : null,
+									s.startMs != null ? jsx("span", { className: "dstv_spanArrow", "aria-hidden": "true", children: "→" }, "spA") : null,
+									s.endMs != null
+										? jsx("span", { className: "dstv_spanEdge", children: fmtClock(s.endMs) }, "sp1")
+										: s.live === true ? jsx("span", { className: "dstv_spanLive", children: t("chip.running") }, "spLive") : null
+								] })
+							}, "stSpan")
+							: null,
+						s.cells.map((cell) => {
+							if (cell.kind === "assistant") {
+								return jsxs("div", {
+									className: "dstv_cellRow",
+									children: [
+										jsx("span", { className: "dstv_cellName", children: t("node.assistant") }, "aName"),
+										cell.thinking !== "" ? jsx("div", { className: "dstv_text dstv_clamp2 sec", title: cell.thinking, children: `💭 ${markdownToPlain(cell.thinking)}` }, "aThink") : null,
+										cell.text !== "" ? jsx("div", { className: "dstv_text dstv_clamp2", title: cell.text, children: markdownToPlain(cell.text) }, "aText") : null
+									]
+								}, `a${cell.id}`);
+							}
+							if (cell.kind === "tool") {
+								return jsxs("div", {
+									className: "dstv_cellRow",
+									children: [
+										jsxs("span", {
+											className: "dstv_cellName",
+											title: cell.args !== "" ? `${cell.name} ${String(cell.args).slice(0, TITLE_PREVIEW_CHARS)}` : undefined,
+											children: [
+												cell.running === true ? jsx("i", { className: "dstv_dot", "data-live": true }, "tIcon") : cell.isError ? jsx("span", { className: "dstv_bad", "aria-hidden": "true", children: "✗" }, "tIcon") : jsx("span", { className: "dstv_ok", "aria-hidden": "true", children: "✓" }, "tIcon"),
+												`${toolGlyph(cell.name)} ${cell.name}`,
+												cell.isError ? jsx("span", { className: "dstv_chip err", children: t("chip.error") }, "tErr") : null,
+												cell.running ? jsx("span", { className: "dstv_chip run", children: t("chip.running") }, "tRun") : null
+											]
+										}, "tName"),
+										cell.args !== "" ? jsx("div", { className: "dstv_argsPrev", title: String(cell.args).slice(0, TITLE_PREVIEW_CHARS), children: `${cell.args.replace(/\s+/g, " ").slice(0, 64)}…` }, "tArgs") : null,
+										(cell.durationMs != null || cell.running === true) ? jsx("div", { className: `dstv_durBar${cell.running === true ? " run" : ""}`, children: jsx("i", { style: { width: cell.running === true ? "100%" : `${Math.max(8, Math.round((cell.durationMs / Math.max(1, stats.maxToolMs || stats.toolMs)) * 100))}%` } }) }, "tDur") : null,
+										cell.isError && cell.errorName != null ? jsx("div", { className: "dstv_text sec dstv_clamp2", children: `✗ ${cell.errorName}` }, "tErrName") : null
+									]
+								}, `t${cell.id}`);
+							}
+							return jsx("div", { className: "dstv_cellRow", children: `${t("node.subtool")} · ${cell.name}` }, `s${cell.id}`);
+						})
+					]
+				}, cardKey);
+			}
+			// Special kind cards
+			if (s.kind === "orphan-tool") {
+				const body = s.displayText !== "" ? s.displayText : t("orphan.noText");
+				return jsxs("div", {
+					className: `dstv_hcard ${s.isError ? "stepCardErr" : "stepCardOk"}`,
+					children: [
+						jsxs("span", {
+							className: "dstv_name",
+							children: [
+								jsx("span", { className: s.isError ? "dstv_bad" : "dstv_ok", children: s.isError ? "✗" : "⤷" }, "oIcon"),
+								`${t("node.orphanTool")} · ${s.name}`,
+								jsx("span", { className: "dstv_chips", children: [jsx("span", { className: "dstv_chip info", children: t("orphan.badge") }, "oBadge")] }, "oChips")
+							]
+						}, "oName"),
+						s.args !== "" ? jsx("div", { className: "dstv_text dstv_clamp2 sec", title: s.args, children: s.args }, "oArgs") : null,
+						jsx("div", { className: "dstv_text dstv_clamp4", title: body, children: body }, "oText")
+					]
+				}, cardKey);
+			}
+			if (s.kind === "compaction") {
+				return jsxs("div", {
+					className: "dstv_hcard compactionCard",
+					children: [
+						jsx("span", { className: "dstv_name", children: `♺ ${t("node.compaction")}` }, "cName"),
+						jsx("div", { className: "dstv_text dstv_clamp2", title: s.summary, children: s.summary || "…" }, "cText")
+					]
+				}, cardKey);
+			}
+			if (s.kind === "error") {
+				return jsxs("div", {
+					className: "dstv_hcard errorCard",
+					children: [
+						jsx("span", { className: "dstv_name", children: `✗ ${t("node.error")}` }, "eName"),
+						jsx("div", { className: "dstv_text dstv_clamp2", title: s.message, children: s.message || "…" }, "eText")
+					]
+				}, cardKey);
+			}
+			if (s.kind === "retry") {
+				return jsxs("div", {
+					className: "dstv_hcard retryCard",
+					children: [
+						jsx("span", { className: "dstv_name", children: `↻ ${t("node.retry")}${Number.isFinite(s.retry) ? ` #${s.retry}` : ""}` }, "rName"),
+						jsx("div", { className: "dstv_text sec dstv_clamp2", title: s.message, children: s.message || "…" }, "rText")
+					]
+				}, cardKey);
+			}
+			if (s.kind === "maxTokens") {
+				return jsxs("div", {
+					className: "dstv_hcard maxTokensCard",
+					children: [jsx("span", { className: "dstv_name", children: `⛔ ${t("node.maxTokens")}` }, "mName")]
+				}, cardKey);
+			}
+			if (s.kind === "unknown") {
+				return jsxs("div", {
+					className: "dstv_hcard unknownCard",
+					children: [
+						jsxs("span", { className: "dstv_name", children: [
+							jsx("span", { className: "dstv_bad", style: { background: "var(--dstv-muted)" }, children: "?" }, "ukIcon"),
+							`${t("node.unknown")}${s.eventType !== "" ? ` · ${s.eventType}` : ""}`,
+							jsx("span", { className: "dstv_chips", children: jsx("span", { className: "dstv_chip", children: `seq ${s.seq}` }, "ukSeq") }, "ukChips")
+						] }, "ukName"),
+						s.payload !== "" ? jsx("div", { className: "dstv_text sec dstv_clamp3", title: s.payload, children: s.payload }, "ukText") : null
+					]
+				}, cardKey);
+			}
+			if (s.kind === "command") {
+				return jsxs("div", {
+					className: "dstv_hcard commandCard",
+					children: [
+						jsx("span", { className: "dstv_name", children: `⚡ ${s.name}` }, "cmName"),
+						s.args !== "" ? jsx("div", { className: "dstv_argsPrev", children: s.args }, "cmArgs") : null,
+						s.outcomeKind === "error" ? jsx("div", { className: "dstv_text sec dstv_clamp2", children: `✗ ${s.outcomeText || t("meta.error")}` }, "cmOut") : null
+					]
+				}, cardKey);
+			}
+			return jsx("div", { className: "dstv_hcard", children: s.label }, cardKey);
+		}
+
+		/**
+		 * One station card, memoised. Measured reason: a `→` used to re-render every card
+		 * (135 cards ≈ 6.5ms each, DESIGN §13.03/13.05). The card body reads nothing but its
+		 * own station plus `t`/`fmtClock`, so the only props that can change for an unrelated
+		 * card are none at all — it should not re-render when a neighbour is selected.
+		 *
+		 * `fmtClock` is a per-render arrow over `toLocaleTimeString()`; comparing it would
+		 * defeat the memo, and it only varies with the runtime locale, which arrives together
+		 * with a new `t` (compared below).
+		 */
+		const StationCard = (0, react.memo)(function StationCard(props) {
+			return stationCardBody(props.station, props.cardKey, props.t, props.fmtClock);
+		}, function (prev, next) {
+			return prev.station === next.station && prev.cardKey === next.cardKey && prev.t === next.t;
+		});
+
+		/**
+		 * Kept as a named call so the P2 guard still sees the cards being built inside the
+		 * render boundary — the boundary is what stops one bad station from blanking the
+		 * whole panel. Creating the (memo) element here is cheap; re-rendering it is what
+		 * used to cost 6.5ms per station.
+		 */
+		const renderStationCard = (s, cardKey, t, fmtClock) => jsx(StationCard, { station: s, cardKey: cardKey, t: t, fmtClock: fmtClock }, cardKey);
+
 		function TraceMapView({ useSession, useTrajectory, t, viewRequest, completeViewRequest, loadOlder, sessionKey }) {
 			const scrollerRef = (0, react.useRef)(null);
 			const minimapRef = (0, react.useRef)(null);
@@ -1271,158 +1448,8 @@
 				});
 			}
 
-			const renderStationCard = (s, cardKey) => {
-				if (s.kind === "user") {
-					return jsxs("div", {
-						className: "dstv_hcard userCard",
-						children: [
-							jsx("span", { className: "dstv_name", children: s.who }, "uName"),
-							s.time != null ? jsx("span", { className: "dstv_spanRow", children: jsx("span", { className: "dstv_spanEdge", children: fmtClock(s.time) }, "uClk") }, "uSpan") : null,
-							jsx("div", { className: "dstv_text dstv_clamp3", title: s.text, children: s.text || "…" }, "uText")
-						]
-					}, cardKey);
-				}
-				if (s.kind === "step") {
-					return jsxs("div", {
-						className: `dstv_hcard ${s.hasError ? "stepCardErr" : "stepCardOk"}`,
-						children: [
-							jsxs("span", {
-								className: "dstv_name",
-								children: [
-									s.live === true ? jsx("i", { className: "dstv_dot", "data-live": true }, "stIcon") : s.hasError ? jsx("span", { className: "dstv_bad", "aria-hidden": "true", children: "✗" }, "stIcon") : jsx("span", { className: "dstv_ok", "aria-hidden": "true", children: "✓" }, "stIcon"),
-									jsx("span", { className: "dstv_nameText", children: s.label }, "stLbl"),
-									jsx("span", { className: "dstv_chips", children: s.meta.map((m, i) => jsx("span", { className: "dstv_chip", title: m, children: m }, `sm${i}`)) }, "stChips")
-								]
-							}, "stName"),
-							// G4-T1: exact span. Per spec, a missing edge shows only the edge
-							// that exists — never a fabricated 00:00:00, and never a bogus
-							// end time for a step that is still running.
-							s.startMs != null || s.endMs != null || s.live === true
-								? jsx("div", {
-									className: "dstv_spanRow",
-									title: `${t("detail.start")} → ${t("detail.end")}`,
-									children: jsxs(fragment, { children: [
-										s.startMs != null ? jsx("span", { className: "dstv_spanEdge", children: fmtClock(s.startMs) }, "sp0") : null,
-										s.startMs != null ? jsx("span", { className: "dstv_spanArrow", "aria-hidden": "true", children: "→" }, "spA") : null,
-										s.endMs != null
-											? jsx("span", { className: "dstv_spanEdge", children: fmtClock(s.endMs) }, "sp1")
-											: s.live === true ? jsx("span", { className: "dstv_spanLive", children: t("chip.running") }, "spLive") : null
-									] })
-								}, "stSpan")
-								: null,
-							s.cells.map((cell) => {
-								if (cell.kind === "assistant") {
-									return jsxs("div", {
-										className: "dstv_cellRow",
-										children: [
-											jsx("span", { className: "dstv_cellName", children: t("node.assistant") }, "aName"),
-											cell.thinking !== "" ? jsx("div", { className: "dstv_text dstv_clamp2 sec", title: cell.thinking, children: `💭 ${markdownToPlain(cell.thinking)}` }, "aThink") : null,
-											cell.text !== "" ? jsx("div", { className: "dstv_text dstv_clamp2", title: cell.text, children: markdownToPlain(cell.text) }, "aText") : null
-										]
-									}, `a${cell.id}`);
-								}
-								if (cell.kind === "tool") {
-									return jsxs("div", {
-										className: "dstv_cellRow",
-										children: [
-											jsxs("span", {
-												className: "dstv_cellName",
-												title: cell.args !== "" ? `${cell.name} ${String(cell.args).slice(0, TITLE_PREVIEW_CHARS)}` : undefined,
-												children: [
-													cell.running === true ? jsx("i", { className: "dstv_dot", "data-live": true }, "tIcon") : cell.isError ? jsx("span", { className: "dstv_bad", "aria-hidden": "true", children: "✗" }, "tIcon") : jsx("span", { className: "dstv_ok", "aria-hidden": "true", children: "✓" }, "tIcon"),
-													`${toolGlyph(cell.name)} ${cell.name}`,
-													cell.isError ? jsx("span", { className: "dstv_chip err", children: t("chip.error") }, "tErr") : null,
-													cell.running ? jsx("span", { className: "dstv_chip run", children: t("chip.running") }, "tRun") : null
-												]
-											}, "tName"),
-											cell.args !== "" ? jsx("div", { className: "dstv_argsPrev", title: String(cell.args).slice(0, TITLE_PREVIEW_CHARS), children: `${cell.args.replace(/\s+/g, " ").slice(0, 64)}…` }, "tArgs") : null,
-											(cell.durationMs != null || cell.running === true) ? jsx("div", { className: `dstv_durBar${cell.running === true ? " run" : ""}`, children: jsx("i", { style: { width: cell.running === true ? "100%" : `${Math.max(8, Math.round((cell.durationMs / Math.max(1, stats.maxToolMs || stats.toolMs)) * 100))}%` } }) }, "tDur") : null,
-											cell.isError && cell.errorName != null ? jsx("div", { className: "dstv_text sec dstv_clamp2", children: `✗ ${cell.errorName}` }, "tErrName") : null
-										]
-									}, `t${cell.id}`);
-								}
-								return jsx("div", { className: "dstv_cellRow", children: `${t("node.subtool")} · ${cell.name}` }, `s${cell.id}`);
-							})
-						]
-					}, cardKey);
-				}
-				// Special kind cards
-				if (s.kind === "orphan-tool") {
-					const body = s.displayText !== "" ? s.displayText : t("orphan.noText");
-					return jsxs("div", {
-						className: `dstv_hcard ${s.isError ? "stepCardErr" : "stepCardOk"}`,
-						children: [
-							jsxs("span", {
-								className: "dstv_name",
-								children: [
-									jsx("span", { className: s.isError ? "dstv_bad" : "dstv_ok", children: s.isError ? "✗" : "⤷" }, "oIcon"),
-									`${t("node.orphanTool")} · ${s.name}`,
-									jsx("span", { className: "dstv_chips", children: [jsx("span", { className: "dstv_chip info", children: t("orphan.badge") }, "oBadge")] }, "oChips")
-								]
-							}, "oName"),
-							s.args !== "" ? jsx("div", { className: "dstv_text dstv_clamp2 sec", title: s.args, children: s.args }, "oArgs") : null,
-							jsx("div", { className: "dstv_text dstv_clamp4", title: body, children: body }, "oText")
-						]
-					}, cardKey);
-				}
-				if (s.kind === "compaction") {
-					return jsxs("div", {
-						className: "dstv_hcard compactionCard",
-						children: [
-							jsx("span", { className: "dstv_name", children: `♺ ${t("node.compaction")}` }, "cName"),
-							jsx("div", { className: "dstv_text dstv_clamp2", title: s.summary, children: s.summary || "…" }, "cText")
-						]
-					}, cardKey);
-				}
-				if (s.kind === "error") {
-					return jsxs("div", {
-						className: "dstv_hcard errorCard",
-						children: [
-							jsx("span", { className: "dstv_name", children: `✗ ${t("node.error")}` }, "eName"),
-							jsx("div", { className: "dstv_text dstv_clamp2", title: s.message, children: s.message || "…" }, "eText")
-						]
-					}, cardKey);
-				}
-				if (s.kind === "retry") {
-					return jsxs("div", {
-						className: "dstv_hcard retryCard",
-						children: [
-							jsx("span", { className: "dstv_name", children: `↻ ${t("node.retry")}${Number.isFinite(s.retry) ? ` #${s.retry}` : ""}` }, "rName"),
-							jsx("div", { className: "dstv_text sec dstv_clamp2", title: s.message, children: s.message || "…" }, "rText")
-						]
-					}, cardKey);
-				}
-				if (s.kind === "maxTokens") {
-					return jsxs("div", {
-						className: "dstv_hcard maxTokensCard",
-						children: [jsx("span", { className: "dstv_name", children: `⛔ ${t("node.maxTokens")}` }, "mName")]
-					}, cardKey);
-				}
-				if (s.kind === "unknown") {
-					return jsxs("div", {
-						className: "dstv_hcard unknownCard",
-						children: [
-							jsxs("span", { className: "dstv_name", children: [
-								jsx("span", { className: "dstv_bad", style: { background: "var(--dstv-muted)" }, children: "?" }, "ukIcon"),
-								`${t("node.unknown")}${s.eventType !== "" ? ` · ${s.eventType}` : ""}`,
-								jsx("span", { className: "dstv_chips", children: jsx("span", { className: "dstv_chip", children: `seq ${s.seq}` }, "ukSeq") }, "ukChips")
-							] }, "ukName"),
-							s.payload !== "" ? jsx("div", { className: "dstv_text sec dstv_clamp3", title: s.payload, children: s.payload }, "ukText") : null
-						]
-					}, cardKey);
-				}
-				if (s.kind === "command") {
-					return jsxs("div", {
-						className: "dstv_hcard commandCard",
-						children: [
-							jsx("span", { className: "dstv_name", children: `⚡ ${s.name}` }, "cmName"),
-							s.args !== "" ? jsx("div", { className: "dstv_argsPrev", children: s.args }, "cmArgs") : null,
-							s.outcomeKind === "error" ? jsx("div", { className: "dstv_text sec dstv_clamp2", children: `✗ ${s.outcomeText || t("meta.error")}` }, "cmOut") : null
-						]
-					}, cardKey);
-				}
-				return jsx("div", { className: "dstv_hcard", children: s.label }, cardKey);
-			};
+
+
 
 			// ── minimap: one tick per station, color-coded, click to seek ───────────
 			// A tick needs a readable name: user stations carry no `label`, and the old
@@ -1574,7 +1601,7 @@
 											label: t("error.render"),
 											retryLabel: t("error.retry"),
 											hint: t("error.renderHint"),
-											render: () => renderStationCard(s, `card${s.id}`)
+											render: () => renderStationCard(s, `card${s.id}`, t, fmtClock)
 										}, `card${s.id}`)
 										]
 									}, s.id);
