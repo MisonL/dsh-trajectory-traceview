@@ -1132,8 +1132,12 @@
 								onClick: doLoadOlder,
 								children: `⬆ ${scopeNote}`
 							}, "sScope") : jsx("span", {
+								// `data-static` drops the pointer cursor and the hover highlight:
+								// `.dstv_scope` is styled as a button, so a bare span would still
+								// LOOK clickable — the same lie one layer down.
 								className: "dstv_scope",
-								title: t("search.scopeTip"),
+								"data-static": "true",
+								title: t("search.scopeTipStatic"),
 								children: `⬆ ${scopeNote}`
 							}, "sScope")) : null,
 							searching && matches.length > 0 ? jsx("button", { type: "button", className: "dstv_sbtn", title: t("action.searchPrev"), onClick: () => gotoMatch(-1), children: "↑" }, "sPrev") : null,

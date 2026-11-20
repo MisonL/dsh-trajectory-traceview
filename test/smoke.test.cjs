@@ -1967,7 +1967,21 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 					throw new Error("NOPAGER1 a clickable paging button is rendered with loadOlder=" + String(missing));
 				}
 			}
-			// The scope chip only renders while a query is active, and a static render starts
+			// The non-button form must not LOOK clickable either: `.dstv_scope` carries
+		// `cursor:pointer` and a hover highlight, so a bare span reintroduced the same lie
+		// one layer down (visual affordance instead of a dead handler).
+		if (srcPg.indexOf('"data-static": "true"') < 0) {
+			throw new Error("NOPAGER1 the static scope notice carries no marker to drop button styling");
+		}
+		const stylesPg = fs.readFileSync(path.join(__dirname, "..", "src", "10-styles.js"), "utf8").replace(/\\n/g, "\n");
+		if (stylesPg.indexOf(".dstv_scope[data-static]{cursor:default}") < 0) {
+			throw new Error("NOPAGER1 the static scope notice keeps the button pointer cursor");
+		}
+		// Its tooltip must not promise a click that cannot happen.
+		if (srcPg.indexOf('t("search.scopeTipStatic")') < 0) {
+			throw new Error("NOPAGER1 the static scope notice still advertises the click-to-load tooltip");
+		}
+		// The scope chip only renders while a query is active, and a static render starts
 			// with an empty query — so a rendered-HTML assertion here would be VACUOUS (the
 			// markup is simply absent and `indexOf` on "" is -1). Check the branch structure
 			// instead: without a loader the chip must be a `span`, not a disabled `button`

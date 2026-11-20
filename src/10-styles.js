@@ -273,6 +273,9 @@
 			".dstv_scope{height:18px;padding:0 5px;font-size:10.5px;line-height:1;border:1px solid color-mix(in srgb,var(--dstv-warn) 50%,transparent);border-radius:6px;background:color-mix(in srgb,var(--dstv-warn) 10%,transparent);color:var(--dstv-warn-ink);white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:2px}",
 			".dstv_scope:hover{background:color-mix(in srgb,var(--dstv-warn) 20%,transparent)}",
 			".dstv_scope:disabled{cursor:default;opacity:.6}",
+			// A notice, not a control: no pointer cursor and no hover response.
+			".dstv_scope[data-static]{cursor:default}",
+			".dstv_scope[data-static]:hover{background:color-mix(in srgb,var(--dstv-warn) 10%,transparent)}",
 			".dstv_sbtn{height:18px;min-width:20px;padding:0 3px;font-size:11px;line-height:1;border:0;border-radius:5px;background:0 0;color:var(--dsw-alias-label-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}",
 			".dstv_sbtn:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
 			".dstv_btn[data-on=true]{color:var(--dstv-info-ink);background:color-mix(in srgb,var(--dstv-info) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--dstv-info) 40%,transparent)}",
