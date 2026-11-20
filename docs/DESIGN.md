@@ -4668,3 +4668,87 @@ header 的提示文案是「⇤⇥ 跳轮次」。`⇤` / `⇥` 是键盘上印 
 
 - 仍未跑真实浏览器。
 - `EXPORTCODE1` 验证的是 Markdown 字符串内容，不是用户真的点了导出按钮。
+
+### 12.83 第十六轮：打开标签页后按 → 什么都没发生（2026-11-20）
+
+#### 现象
+
+提示文案写的是「← → 逐站」。用户打开标签页，看到完整轨迹，按 →。
+
+**没有任何反应。**
+
+#### 原因
+
+`revealed` 在概览态是 `null`（全部展开、无选中），此时：
+
+```js
+const R = revealed === null ? N : Math.min(Math.max(1, revealed), N);
+```
+
+所以概览态下 `R === N`。两个方向因此判据完全不同：
+
+```js
+const stepPrev = () => { ...; if (R > 1) setRevealed(R - 1); };          // R=N → 跳到 N-1
+const stepNext = () => { ...; if (R < N) setRevealed(R + 1);
+                             else setRevealed(null); };                   // R=N → null → 仍是 null
+```
+
+实测 N=5：
+
+| 按键 | 起点 | 结果 |
+|---|---|---|
+| → | overview | overview — **完全没反应** |
+| ← | overview | 第 4 站 — 悄悄跳过最新那一站 |
+
+**→ 在任何会话里都是死的**，而它是新读者第一件会按的键。← 则跳过了第 N 站：用户在概览态想往回看，得到的却是"倒数第二站"，最新那一站永远看不到。
+
+这个缺陷从回放功能存在那天就在，之前的测试全都从"已在逐站状态"开始，所以没碰到。
+
+#### 修法
+
+把概览态理解成"已经在末尾之后"：
+
+```js
+const stepPrev = () => {
+	if (revealed === null) { if (N > 0) setRevealed(N); return; }   // 从最后一站开始
+	if (R > 1) setRevealed(R - 1);
+};
+const stepNext = () => {
+	if (revealed === null) { if (N > 0) setRevealed(1); return; }   // 从第一站重新开始
+	if (R < N) setRevealed(R + 1);
+	else setRevealed(null);
+};
+```
+
+`→` 从第 1 站开始，与播放按钮的"从头播"语义一致。
+
+#### 守卫怎么写的
+
+这次没有断言关键词，而是**把真实函数体从 `lib/client.js` 里抽出来执行**：
+
+```js
+const body = grab("stepNext");                  // 大括号配平切片
+const box = { hit: "NONE" };
+new Function("N","R","revealed","setRevealed","setPlaying","setFollow",
+  body + "\nstepNext();")(N, R, revealed, v => { box.hit = v; }, ...);
+```
+
+然后断言：overview 下 → 必须落 1、← 必须落 N（三种 N 值都测），中段 →/← 的步长不许变，末尾 → 回 overview，开头 ← 不动。
+
+三个变异全部变红：
+
+| 变异 | 结果 |
+|---|---|
+| 还原旧 `stepNext` | `→ stayed in overview (setRevealed(null))` |
+| 还原旧 `stepPrev` | `← from overview must land on the last station (1), got NONE` |
+| 中段步长改成 +2 | `→ stopped working inside the timeline` |
+
+第三个变异是故意加的——只测 overview 的话，把 `R + 1` 写成 `R + 2` 照样绿。
+
+#### 为什么之前没发现
+
+所有导航相关的测试都从"已经选了一个站"的状态起步。概览态是**初始状态**，恰恰是最常被看到、却最少被测试覆盖的那个。这和 §12.80 的 minimap（overview 下全 -1 会让整条 strip 从键盘消失）是同一类盲区：**初始态和选中态是两套行为，只测一套就等于没测**。
+
+#### 未验证
+
+- 仍未跑真实浏览器。这里验证的是状态机（纯函数体 + 注入的 setter），不是真的按了方向键。
