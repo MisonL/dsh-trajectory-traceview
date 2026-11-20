@@ -1881,6 +1881,61 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── SEQCOERCE1: a BigInt/Symbol `seq` must not refuse to render the log ────
+	// `seq` is the field the whole projection orders by (`a.seq - b.seq`), compares
+	// (`>`) and pastes into ids (template literals). JS THROWS on a Symbol in all three
+	// and mixes BigInt with number without warning, so a truncated or hand-edited log
+	// crashed the entire view — the one input the tool exists to report on.
+	{
+		const sq = (seq, txt) => ({ kind: "user", seq, time: 1e12, turn: 1, content: [{ type: "text", text: txt ?? "u" }] });
+		const build = (list) => deriveTraceTree({ eventNodes: list, requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		// Each of these threw a TypeError before the fix.
+		const hostile = [
+			["Symbol", [sq(Symbol("s"))]],
+			["two Symbols (hits the sort comparator)", [sq(Symbol("a")), sq(Symbol("b"))]],
+			["Symbol mixed with a number", [sq(Symbol("a")), sq(5)]],
+			["BigInt", [sq(5n), sq(3n)]],
+			["BigInt beyond safe range", [sq(2n ** 80n), sq(1)]],
+			["plain object", [sq({})]],
+			["string", [sq("abc")]]
+		];
+		for (const [label, list] of hostile) {
+			let tr = null;
+			try { tr = build(list); } catch (e) {
+				throw new Error("SEQCOERCE1 a " + label + " seq crashed the projection: " + String(e.message).slice(0, 60));
+			}
+			if (tr.stations.length !== list.length) {
+				throw new Error("SEQCOERCE1 a " + label + " seq lost stations (" + tr.stations.length + " of " + list.length + ")");
+			}
+			// Ids double as React keys, so they must still be unique even when every
+			// hostile seq normalises to the same value.
+			const ids = tr.stations.map((st) => st.id);
+			if (new Set(ids).size !== ids.length) {
+				throw new Error("SEQCOERCE1 duplicate station ids from " + label + ": " + ids.join(","));
+			}
+		}
+		// Ordering must still be NUMERIC. The seqs are chosen so a lexicographic sort
+		// disagrees ("10" < "2"), otherwise this assertion cannot tell the two apart —
+		// my first version used 1,2,3 and a string sort passed it.
+		const ordered = build([sq(30, "c"), sq(2, "a"), sq(10, "b")]);
+		if (ordered.stations.map((st) => st.id).join(",") !== "u2,u10,u30") {
+			throw new Error("SEQCOERCE1 ordering is not numeric: " + ordered.stations.map((st) => st.id).join(","));
+		}
+		// The repair must be NON-DESTRUCTIVE: the host's snapshot objects are shared with
+		// every other view in the app, so rewriting their `seq` in place would corrupt
+		// another consumer. Copy instead of mutate.
+		const symNode = sq(Symbol("keepme"));
+		build([symNode]);
+		if (typeof symNode.seq !== "symbol") {
+			throw new Error("SEQCOERCE1 the repair pass overwrote the host's node (seq became " + typeof symNode.seq + ")");
+		}
+		// And a well-formed snapshot must not be copied at all — the repair pass has to
+		// stay off the normal path.
+		const keep = [sq(1), sq(2)];
+		build(keep);
+		if (keep[0].seq !== 1 || keep[1].seq !== 2) throw new Error("SEQCOERCE1 ordinary nodes were rewritten");
+	}
+
 	// ── NAVOVERVIEW1: → must advance from the overview state ───────────────────
 	// `revealed` is null in overview (everything shown, nothing selected) and `R` then
 	// reads as N, so the two directions behaved completely differently on the state the
