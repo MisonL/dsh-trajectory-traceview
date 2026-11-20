@@ -4752,3 +4752,81 @@ new Function("N","R","revealed","setRevealed","setPlaying","setFollow",
 #### 未验证
 
 - 仍未跑真实浏览器。这里验证的是状态机（纯函数体 + 注入的 setter），不是真的按了方向键。
+
+### 12.84 第十七轮：seq 是 BigInt/Symbol 时整个视图崩掉（2026-11-20）
+
+#### 这是最早发现、最晚修的一条
+
+这个缺陷在第六轮做主机恶意输入 fuzz 时就记下了，一直挂着：*"`deriveTraceTree` throws on `seq`/`step` = BigInt or Symbol — not yet fixed."* 每轮都在处理别的东西，它就一直躺在待办里。
+
+#### 为什么它比看起来严重
+
+`seq` 不是普通字段，它是整个投影的**排序键、比较键和 id 来源**：
+
+```js
+const nodes = safeList(snap?.eventNodes).sort((a, b) => a.seq - b.seq);   // 排序
+if (st.seq > n.seq) st.seq = n.seq;                                        // 比较
+const baseId = `u${n.seq}`;                                                // 模板字符串
+```
+
+JS 对 Symbol 在这三处**全都抛**：
+
+| 表达式 | 结果 |
+|---|---|
+| `Symbol - number` | `TypeError: Cannot convert a Symbol value to a number` |
+| `Symbol > number` | 同上 |
+| `` `${Symbol}` `` | `TypeError: Cannot convert a Symbol value to a string` |
+
+BigInt 更阴：`5n - 3n` 得 `2n`，但 `2n - 1` **混合运算直接抛**，所以两个 BigInt 节点的 sort 能过，一个 BigInt 加一个 number 就炸。
+
+一份被截断或手工改过的日志因此让**整个视图拒绝渲染**。而这个工具的全部承诺是"日志记了什么就展示什么"——包括它坏了这件事。崩掉等于违背了它存在的理由。
+
+#### 修法
+
+在投影入口把 `seq` 一次性归一到 number：
+
+```js
+function seqOf(v) {
+	if (Number.isSafeInteger(v)) return v;
+	if (typeof v === "bigint") { const n = Number(v); return Number.isSafeInteger(n) ? n : null; }
+	return null;
+}
+```
+
+BigInt 在安全范围内保留（`5n` → `5`），超范围与 Symbol / 对象 / 字符串一律归一为 `null`，交给下游的"合成站点"逻辑处理。
+
+两个细节：
+
+**只在需要时复制。** 正常快照一个节点都不用修，不能为此付一次全量 map：
+
+```js
+for (const n of rawNodes) {
+	if (!Number.isSafeInteger(n.seq)) { nodes = rawNodes.map(...); break; }
+}
+```
+
+实测 600 节点 fold 中位 **6.26 ms**，未回归。
+
+**复制，不原地改写。** 宿主快照对象与其他视图共享，改它的 `seq` 会污染别的消费者。
+
+#### 守卫里我犯的错
+
+排序断言第一版写成 `[1, 2, 3]` → 期望 `u1,u2,u3`。变异测试时把排序换成 `String(a.seq).localeCompare(...)` 却是**绿的**——因为 `"1" < "2" < "3"`，字典序和数值序在这个输入上结果一样。
+
+改成 `[30, 2, 10]`：
+
+```
+数值排序 → u2,u10,u30   ✓ 期望
+字典排序 → u10,u2,u30   ✓ 会变红
+```
+
+**又是"变异通过不是防线，是探针错了"**。这是本轮第二次（第一次是"非破坏性"断言只用正常 seq 测，原地改写也能过；改成用 Symbol 节点测才红）。
+
+#### 剩下的
+
+`step` 字段如果用 Symbol 仍可能有问题，但我没测到实际路径——`step` 不参与全局 sort，只在 `st.steps.set(step, st)` 当 Map 键用，Symbol 当键是合法的。**未验证，如实记录。**
+
+#### 未验证
+
+- 仍未跑真实浏览器。
+- 归一化后所有恶意 seq 都变成 `null`，多个这样的节点靠 `-2`、`-3` 后缀区分。id 唯一性断言过了，但**排序稳定性**（`null` 之间的相对顺序）依赖 `sort` 的实现细节，未单独验证。
