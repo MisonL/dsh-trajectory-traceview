@@ -1881,6 +1881,52 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── NAVOVERVIEW1: → must advance from the overview state ───────────────────
+	// `revealed` is null in overview (everything shown, nothing selected) and `R` then
+	// reads as N, so the two directions behaved completely differently on the state the
+	// reader is in when the tab first opens:
+	//   →  `R < N` false → setRevealed(null) → still null → THE KEY DID NOTHING
+	//   ←  `R > 1` true  → jumped to N-1, silently skipping the newest station
+	// The hint advertises "← → 逐站", so the first thing a new reader presses is →.
+	{
+		const navSrc = fs.readFileSync(path.join(__dirname, "..", "lib", "client.js"), "utf8");
+		const grab = (name) => {
+			const at = navSrc.indexOf("const " + name + " = () => {");
+			if (at < 0) throw new Error("NAVOVERVIEW1 " + name + " is missing");
+			let i = navSrc.indexOf("{", at), depth = 0;
+			for (; i < navSrc.length; i += 1) {
+				if (navSrc[i] === "{") depth += 1;
+				else if (navSrc[i] === "}") { depth -= 1; if (depth === 0) { i += 1; break; } }
+			}
+			return navSrc.slice(at, i);
+		};
+		// Execute the REAL body against a recording setRevealed, so this tests behaviour
+		// rather than the presence of a token.
+		const drive = (name, N, revealed) => {
+			const body = grab(name);
+			const box = { hit: "NONE" };
+			const R = revealed === null ? N : Math.min(Math.max(1, revealed), N);
+			const setRevealed = (v) => { box.hit = v; };
+			new Function("N", "R", "revealed", "setRevealed", "setPlaying", "setFollow", body + "\n" + name + "();")(
+				N, R, revealed, setRevealed, () => {}, () => {});
+			return box.hit;
+		};
+		for (const N of [1, 2, 5]) {
+			const fwd = drive("stepNext", N, null);
+			if (fwd === "NONE") throw new Error("NAVOVERVIEW1 → did nothing in overview with N=" + N);
+			if (fwd === null) throw new Error("NAVOVERVIEW1 → stayed in overview (setRevealed(null)) with N=" + N);
+			if (fwd !== 1) throw new Error("NAVOVERVIEW1 → from overview must start at station 1, got " + fwd);
+			const back = drive("stepPrev", N, null);
+			// ← from overview must reach the LAST station; landing on N-1 skipped one.
+			if (back !== N) throw new Error("NAVOVERVIEW1 ← from overview must land on the last station (" + N + "), got " + back);
+		}
+		// The mid-timeline behaviour must not regress.
+		if (drive("stepNext", 5, 3) !== 4) throw new Error("NAVOVERVIEW1 → stopped working inside the timeline");
+		if (drive("stepPrev", 5, 3) !== 2) throw new Error("NAVOVERVIEW1 ← stopped working inside the timeline");
+		if (drive("stepNext", 5, 5) !== null) throw new Error("NAVOVERVIEW1 → at the end must return to overview");
+		if (drive("stepPrev", 5, 1) !== "NONE") throw new Error("NAVOVERVIEW1 ← at the first station must stay put");
+	}
+
 	// ── EXPORTCODE1: the Markdown export must carry what the panel shows ───────
 	// The detail panel renders an error's `code` and a retry's counter / provider /
 	// state; the export showed only the message. So copying a failed step produced a

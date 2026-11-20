@@ -474,14 +474,25 @@
 				setFollow(false);
 				setRevealed(1);
 			};
+			// The two directions must treat the OVERVIEW state symmetrically. `revealed`
+			// is null there (everything is shown, nothing selected) and `R` reads as N, so
+			// the old bodies behaved completely differently on the state the reader is in
+			// when the tab first opens:
+			//   →  `R < N` is false → `setRevealed(null)` → still null → THE KEY DID NOTHING
+			//   ←  `R > 1` is true   → jumped to station N-1, skipping the newest one
+			// The hint says "← → 逐站", so the first thing a new reader tries is →, and it
+			// was inert on every session. Overview means "past the end": → restarts at the
+			// first station (exactly what the play button does), ← starts from the last.
 			const stepPrev = () => {
 				setPlaying(false);
 				setFollow(false);
+				if (revealed === null) { if (N > 0) setRevealed(N); return; }
 				if (R > 1) setRevealed(R - 1);
 			};
 			const stepNext = () => {
 				setPlaying(false);
 				setFollow(false);
+				if (revealed === null) { if (N > 0) setRevealed(1); return; }
 				if (R < N) setRevealed(R + 1);
 				else setRevealed(null);
 			};
