@@ -4416,6 +4416,41 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	const h5 = nextHashFor("#keep", null);
 	if (h5.hash !== "#keep" || h5.changed !== false) throw new Error("G2 must tolerate a missing anchor");
 
+	// ── NUMGUARD1: a non-integer "counts" field must become null, never a number
+	// `shadowedItemCount` / `shadowedTokenCount` come straight from the log. A corrupt
+	// value (3.5, a Symbol, a string) must be reported as "not recorded" — the old raw
+	// pass-through invented a number: 3.5 rendered as "4 tokens" via fmtTokens' rounding.
+	// `count` is covered by RENDERFUZZ1 (it reaches a bare template literal); `tokens`
+	// is NOT, because fmtTokens swallows a Symbol with Number.isFinite — so it stayed
+	// green under mutation until this guard pinned the contract.
+	{
+		const foldCompaction = (node) => deriveTraceTree({
+			eventNodes: [Object.assign({ kind: "compaction", seq: 1, time: 1e12, summary: "S" }, node)],
+			requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+		}, t);
+		const tokensOf = (node) => {
+			const found = foldCompaction(node).stations.find((x) => x.kind === "compaction");
+			return found === void 0 ? undefined : found.tokens;
+		};
+		const cases = [
+			["a fractional token count", 3.5],
+			["a Symbol token count", Symbol("t")],
+			["a string token count", "34000"],
+			["NaN", NaN],
+			["Infinity", Infinity]
+		];
+		for (const [label, bad] of cases) {
+			const got = tokensOf({ shadowedItemCount: 1, shadowedTokenCount: bad });
+			if (got !== null) {
+				throw new Error("NUMGUARD1 " + label + " must be recorded as null, got " + String(typeof got) + " " + String(got));
+			}
+		}
+		// A real integer must still survive untouched.
+		if (tokensOf({ shadowedItemCount: 1, shadowedTokenCount: 34000 }) !== 34000) {
+			throw new Error("NUMGUARD1 a valid token count was dropped");
+		}
+	}
+
 	// ── LOSS1: two real records that collide on a key must BOTH survive ──────
 	// (a) two requests for the same turn:step — a merged/retried log can carry both.
 	// A `Map.set` kept only the last: status/usage/prompt silently lost, and no count.

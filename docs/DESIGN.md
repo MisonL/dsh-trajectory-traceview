@@ -5961,3 +5961,28 @@ B) 同一 turn 两条 tool-call 用同一 callId → 只剩 1 个 cell，name = 
 #### 附带说明
 
 `cellId` 里 verbatim 的 callId 我**没有动**：anchor 走的是 `station.anchorKey`（`e<seq>`），不是 cell id；而 cell id 里保留原 callId 是给 React key 与调试用的。两个同 id 的 cell 在同一 station 里会得到相同 key——这是本改动**没有**解决的一个残留点，记在这里。
+
+### 13.10 三处"守卫盲点"实测：两处已有覆盖，一处真缺（2026-11-20）
+
+拿到清单说这三处"没有变异测试证明会红"，就逐个**真做变异**，不靠看代码猜。
+
+| 变异 | 结果 | 结论 |
+|---|---|---|
+| `cellId` 去掉 Symbol 分支 | **红**：`EXPORTLEAK1 a Symbol tool-call id crashed…` | 已有覆盖 |
+| 错误站点 `code: n.code` 去掉 `typeof` 守卫 | **红**：`RENDERFUZZ1 an error with a Symbol code…` | 已有覆盖 |
+| `shadowedItemCount` 去掉 `isSafeInteger` | **红**：`RENDERFUZZ1 a compaction with Symbol counters…` | 已有覆盖 |
+| `shadowedTokenCount` 去掉 `isSafeInteger` | **绿** | **真缺** |
+
+#### `shadowedTokenCount` 为什么漏
+
+它走到 `fmtTokens(s.tokens)`，而 `fmtTokens` 用 `Number.isFinite` 先行过滤——Symbol 不抛。所以没有崩溃可抓。
+
+但**崩溃不是唯一的 failure mode**：旧值 `3.5` 被 `fmtTokens` 四舍五入成 `"4 tokens"`，凭空造出一个日志里不存在的数据。这是比崩溃更隐蔽的错误。
+
+新增 `NUMGUARD1`：钉住"`shadowedTokenCount` 非法值必须为 `null`"这个契约，覆盖 3.5 / Symbol / 字符串 / NaN / Infinity，并验证合法整数 34000 仍然原样保留。
+
+变异后守卫如预期变红：`NUMGUARD1 a fractional token count must be recorded as null, got number 3.5`；恢复后绿。
+
+#### 方法论修正
+
+原清单里"`cellId` 和错误站点 `code` 没验证"是**错的**——它们早就有确定性守卫（上一轮专门补的，就在 `EXPORTLEAK1` / `RENDERFUZZ1` 里）。只有 `shadowedTokenCount` 是真缺口。这也提醒我：**清单本身也要实测，不能照着清单动手。**
