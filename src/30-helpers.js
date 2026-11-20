@@ -484,7 +484,14 @@
 			// `<details>` ends up showing a different message's body, while the collapsed one
 			// below it silently expands.
 			for (const n of nodes) {
-				if (beforeSeq != null && n.seq >= beforeSeq) break;
+				// `continue`, not `break`. This used to stop at the FIRST node whose seq was
+				// past the step, which silently depended on `nodes` being sorted ascending.
+				// The only caller passes the already-sorted `tree.nodes`, so it worked — but
+				// any caller handing in a raw or re-ordered log got an EMPTY list with no
+				// error (measured: [seq5, seq1, seq3] with beforeSeq=4 returned nothing).
+				// Filtering costs one extra number comparison per node and removes the
+				// hidden precondition.
+				if (beforeSeq != null && n.seq != null && n.seq >= beforeSeq) continue;
 				if (n.kind === "user" || n.kind === "steering" || n.kind === "context") {
 					out.push({ role: "user", seq: n.seq ?? null, content: n.content ?? [], text: blocksText(n.content, tr) });
 				} else if (n.kind === "assistant") {

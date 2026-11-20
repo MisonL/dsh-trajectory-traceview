@@ -1881,6 +1881,33 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── RECORDER1: the message rebuild must not depend on caller-side sorting ───
+	// `reconstructMessages` walked `nodes` and `break`ed at the first seq past the step.
+	// That silently required ascending order. The only caller passes the sorted
+	// `tree.nodes`, so it happened to work — but a raw or re-ordered log produced an
+	// EMPTY message list with no error (measured: [5,1,3] with beforeSeq=4 returned
+	// nothing). The request tab then shows "no messages" for a step that has them.
+	{
+		const uN = (seq, txt) => ({ seq, kind: "user", content: [{ type: "text", text: txt }] });
+		const rebuild = (nodes, before) => reconstructMessages(nodes, before, t).map((m) => m.text).join(",");
+		if (rebuild([uN(1, "1"), uN(3, "3"), uN(5, "5")], 4) !== "1,3") {
+			throw new Error("RECORDER1 the sorted case broke: " + rebuild([uN(1, "1"), uN(3, "3"), uN(5, "5")], 4));
+		}
+		// The SAME set, shuffled, must yield the same answer. Before the fix this was "".
+		if (rebuild([uN(5, "5"), uN(1, "1"), uN(3, "3")], 4) !== "1,3") {
+			throw new Error("RECORDER1 an unsorted node list lost messages: " + JSON.stringify(rebuild([uN(5, "5"), uN(1, "1"), uN(3, "3")], 4)));
+		}
+		// Output order is the INPUT order (this helper filters; the caller supplies the
+		// sorted list). What must not change is WHICH messages survive the cutoff.
+		if (rebuild([uN(3, "3"), uN(1, "1")], 4) !== "3,1") {
+			throw new Error("RECORDER1 reverse order changed the surviving set: " + JSON.stringify(rebuild([uN(3, "3"), uN(1, "1")], 4)));
+		}
+		// No cutoff means everything, in the order given.
+		if (rebuild([uN(5, "5"), uN(1, "1")], void 0) !== "5,1") {
+			throw new Error("RECORDER1 dropping the cutoff changed the output");
+		}
+	}
+
 	// ── BUTTONNAME1: no button may be named only by a glyph ────────────────────
 	// `title` does NOT name an element that has content: the name is computed from the
 	// descendants first, so a button whose children are "↑" announces "↑" and the tooltip
