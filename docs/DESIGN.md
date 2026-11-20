@@ -5541,3 +5541,62 @@ document.scrollWidth = 384  →  整页横向滚动 9px
 #### 验收
 
 `node scripts/browser-check.mjs` = 独立门禁（需要浏览器），11 项检查；`node test/smoke.test.cjs` = 88 道守卫（不需要浏览器）。两者都必须绿。
+
+### 12.98 在真宿主（dsh web）里跑：详情面板底部 191px 被裁掉且滚不到（2026-11-20）
+
+#### 怎么跑的
+
+这台机器上 `web` profile 里装的就是这个仓库的软链（`dsh-trajectory-traceview-plus: link:/Volumes/Work/code/dsh-trajectory-traceview`），所以 `dsh web` 起来的宿主加载的就是**当前源码**。
+
+```
+dsh web --no-open --port 0    → http://127.0.0.1:55979/?token=…
+```
+
+打开真实会话，点「轨迹视图」标签页（紧跟在官方「轨迹」后面，order 21 > 20 ✓）。
+
+#### 真宿主暴露的问题
+
+面板在宿主的视图区里，而宿主是：
+
+```
+wSkVaW_viewArea{display:flex; overflow-y:hidden; height:501px}
+```
+
+`.dstv_root` 作为 flex 子项被**拉伸到 501px**，但它的内容有 692px（栏 270 + 详情 266 + 头部 129）。`overflow-y` 是 `visible`，于是多出来的 191px 被宿主的 `overflow:hidden` 裁掉：**详情面板的下半截看得见边、滚不到底，页面上也没有任何滚动条能到那里。**
+
+实测数字（真宿主 1280×577）：
+
+```
+root 盒子 501px / 内容 692px / viewArea overflow-y:hidden
+详情面板 top 502 → bottom 768（视口只有 577）
+detail max-height 46vh = 266px ← vh 是视口高度，不是容器高度
+```
+
+`46vh` 这个上限在「容器比视口矮」时是错的：它按视口算，而真正可用的是容器。
+
+#### 修法
+
+`.dstv_root{overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain}`
+
+宿主把盒子钉死时，面板自己滚，而不是让内容溢出被裁。头部是 `position:sticky`，在滚动容器里仍然吸顶。
+
+修后实测（同一个真实会话，132 站）：
+
+| | 修前 | 修后 |
+|---|---|---|
+| 详情面板底部可达 | 否（768 > 577，无滚动） | 是（`scrollTop` 到 `maxScroll` 319） |
+| 头部吸顶 | — | 仍吸顶 |
+| 页面横向溢出 | 无 | 无 |
+| composer 盖住的按钮 | — | 150 个里 1 个（见下） |
+
+#### 还剩一个 7px 的小问题
+
+滚到底时，详情面板里有一个「复制」按钮的**下沿 7px** 压在 composer 上沿（按钮 435–456，composer 从 449 开始）。按钮中心 445 仍可点击，所以不是"不可达"，但视觉上压了 7px。
+
+原因没查清：root 已留 `paddingBottom:128px`（等于 composer 高度），按理内容应止于 449。可能来自详情面板内部滚动容器与 padding 的叠加。**记录为已知小问题，未修。**
+
+#### 这一轮说明什么
+
+所有 `react-dom/server` 测试、甚至我自己的 harness（宿主外壳是我自己写的）都**发现不了**这个问题：它只在"宿主把盒子钉死"时出现。harness 里 `#seat` 是普通块级元素，会随内容长高，所以永远绿。
+
+**我搭的 harness 不是宿主，它只是宿主形状的一次猜测。**
