@@ -4939,3 +4939,66 @@ const doLoadOlder = () => {
 
 - 仍未跑真实浏览器。
 - `canPage` 在 `inject` 返回 `{}` 的那条真实路径上是否真的发生，我没有在运行中的插件里复现（需要会话绑定消失的时刻），只有源码推断。
+
+### 12.87 第十八、十九轮：必然无效的按钮、搜索说"1/3"却不在第 1 个（2026-11-20）
+
+#### 一个按了必然没反应的按钮（`NOPAGER1`）
+
+`hasMore` 是**会话**的属性，只说明历史还有更多；它不说明这个视图拿到了取它的手段。而 `loadOlder` 来自 slot 的 `inject`，会话绑定消失时返回 `{}`：
+
+```js
+inject: (sessionId) => {
+    const session = ctx.sessions.binding(sessionId)?.session;
+    if (session === void 0) return {};        // ← loadOlder 就没了
+```
+
+此时按钮仍然渲染成**可点**，按下后 `doLoadOlder` 第一行 `return` 静默退出。实测：
+
+| loadOlder | 载入更早历史按钮 |
+|---|---|
+| 函数 | 有（可点）✓ |
+| undefined / null / "nope" | 有（可点）❌ |
+
+同一个洞第二处：搜索范围提示是 `<button>`，tooltip 写「点这里可以加载更早历史」，无 loader 时 `disabled`——承诺了做不到的事。
+
+修法：`canPage` 决定两处 paging 控件的 `disabled`；范围提示无 loader 时降级为 `span`（保留警告，去掉交互承诺）。
+
+#### 搜索说"1/3"，但视图没动，按 ↓ 跳到第 2 个（`MATCHSTART1`）
+
+`matchPtr` 初始为 0。刚打完查询：
+
+```
+计数器显示 1/3      ← 声称"当前在第 1 个命中"
+视图实际位置        没动（输入时不调用 seek）
+```
+
+再按 ↓：`base = min(0, 2) = 0` → `next = 1` → 跳到**第二个**命中。第 1 个被跳过，只能靠绕一圈才看得到，而绕回来时计数器才第一次真的显示 1/3。
+
+修法：`matchPtr` 初始 `-1`（"没有当前命中"），`gotoMatch` 对 -1 走环形两端，计数器在 -1 时显示「–/3 命中」而不是编造位置。
+
+#### 旧守卫误报成回归
+
+`X1-n` 断言的是字面表达式：
+
+```js
+if (!/const base = Math\.min\(matchPtr, matches\.length - 1\)/.test(srcN)) throw ...
+```
+
+我一改实现它就报"matchPtr 不再被 clamp"——**但那不是回归**，只是断言写得太具体。改成执行真实函数体：
+
+```js
+new Function("dir","matchPtr","matches","setMatchPtr","seek", grabGm + "\ngotoMatch(dir);")(...)
+```
+
+这正是 §12.83 `NAVOVERVIEW1` 用过的办法。**断言行为，不要断言写法。**
+
+#### 又一次空断言
+
+范围提示那条断言第一版是"渲染 HTML 里不得有 `<button class=dstv_scope`"。但静态渲染时 `query` 是空串、`searching` 为假，**整块 markup 根本不存在**，`indexOf` 在空串上返回 -1，永远通过。改成检查分支结构才变红。
+
+同类第二次（第一次是 §12.85 的 fuzz 池太温和）。**"永远通过"的断言比没有断言更糟**，因为它给了守卫一个假的存在感。
+
+#### 未验证
+
+- `inject` 返回 `{}` 的那条路径是**源码推断**，没有在运行中的插件里复现（需要会话绑定消失的时刻）。
+- 仍未跑真实浏览器。
