@@ -4893,3 +4893,49 @@ step = BigInt 3n  →  ✓（能过）
 
 - `step` 修了 `assistant` / `tool-result` / `partial` 三处，其他读 `step` 的地方（若有）未逐一排查。
 - 仍未跑真实浏览器。
+
+### 12.86 第十八轮：一个按了必然没反应的按钮（2026-11-20）
+
+#### `hasMore` 和 `loadOlder` 是两件事
+
+`hasMore` 是**会话**的属性，只说明历史还有更多；它不说明这个视图拿到了取它的手段。而 `loadOlder` 来自 slot 的 `inject`：
+
+```js
+inject: (sessionId) => {
+    const session = ctx.sessions.binding(sessionId)?.session;
+    if (session === void 0) return {};        // ← 这里 loadOlder 就没了
+    return { sessionKey, loadOlder: ... };
+}
+```
+
+所以存在一个真实可达的状态：`hasMore === true` 而 `loadOlder` 不存在。此时：
+
+```js
+const doLoadOlder = () => {
+    if (typeof loadOlder !== "function" || olderBusy === true || loadingOlder) return;
+```
+
+按钮渲染成**可点**状态，按下后这行静默退出。实测渲染：
+
+| loadOlder | 载入更早历史按钮 |
+|---|---|
+| 函数 | 有（可点）✓ |
+| undefined | 有（可点）❌ |
+| null / "nope" | 有（可点）❌ |
+
+看起来能点、实际必然无效的控件，比没有控件更糟——用户会怀疑是"没反应"，而不是"没有这个功能"。
+
+同一类洞还有第二处：搜索范围提示是个 `<button>`，tooltip 写「点这里可以加载更早历史」，无 loader 时它 `disabled`——承诺了做不到的事。改成 `span`（保留警告文本，去掉交互承诺）。
+
+#### 两个测试卫生问题
+
+**1. 空断言。** 我给范围提示写的断言是"渲染出来的 HTML 里不得出现 `<button class=dstv_scope`"。但静态渲染时 `query` 是空串，`searching` 为假，**整块 markup 根本不存在**，`indexOf` 在空串上返回 -1，永远通过。这种断言比没有更糟——它给了守卫一个假的存在感。
+
+改成检查分支结构（无 loader 分支必须是 `span`），变异才变红。
+
+**2. 变异没应用成功，我却差点读成"守卫没抓住"。** 修的时候 python 三引号转义写坏了，`assert s.count(old)==1` 抛 AssertionError，但那次运行恰好还没走到守卫。看清"是断言失败还是守卫失败"再下结论，否则会得出错误的"防线有效"。
+
+#### 未验证
+
+- 仍未跑真实浏览器。
+- `canPage` 在 `inject` 返回 `{}` 的那条真实路径上是否真的发生，我没有在运行中的插件里复现（需要会话绑定消失的时刻），只有源码推断。
