@@ -1881,6 +1881,59 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── HOSTILEFIELDS1: 1000 rounds of non-serialisable garbage must not throw ──
+	// The six-round fuzz only produced JSON-representable values, so BigInt, Symbol and
+	// functions were never exercised — which is exactly where two real crashes lived
+	// (a Symbol `seq` and a Symbol `step`). Re-run the same shape with those types in
+	// the pool and require zero throws.
+	{
+		let seed = 987654321;
+		const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+		const pickFrom = (arr) => arr[Math.floor(rnd() * arr.length)];
+		const nasties = [null, void 0, 0, -1, 1.5, NaN, Infinity, -Infinity, "", "x", true, false,
+			Symbol("s"), 5n, 2n ** 80n, {}, [], [1], { a: 1 }, () => 1, Number.MAX_SAFE_INTEGER + 1];
+		// NUMERIC fields get their own pool, weighted towards the two types that actually
+		// crashed (Symbol and BigInt). With the general pool a Symbol landed in `step`
+		// about once every 700 nodes, so this fuzz silently missed the very bug it exists
+		// to find — measured 0/300 against a broken `step`. Tilted pools are what make it
+		// a probe rather than decoration.
+		const numericNasties = [Symbol("s"), Symbol("t"), 5n, 2n ** 80n, NaN, Infinity, -1, 1.5, "", {}, void 0, null];
+		const maybeNum = (v) => (rnd() < 0.45 ? pickFrom(numericNasties) : v);
+		const maybeN = (v) => (rnd() < 0.35 ? pickFrom(nasties) : v);
+		const mkNasty = () => ({
+			kind: maybeN(pickFrom(["user", "assistant", "tool-result", "compaction", "turn-error", "model-retry", "turn-max-tokens", "command", "unknown", "context", "steering", "bogus"])),
+			seq: maybeNum(Math.floor(rnd() * 40)), time: maybeNum(1e12), turn: maybeNum(1), step: maybeNum(1),
+			messageId: maybeN("m"), callId: maybeN("c"), callTime: maybeNum(1e12),
+			isError: maybeN(rnd() < 0.5), interrupted: maybeN(rnd() < 0.2),
+			blocks: maybeN([{ kind: pickFrom(["text", "reasoning", "image", "tool-call", "other", "bogus"]), text: maybeN("T"), callId: maybeN("c"), name: maybeN("n"), argsRaw: maybeN("{}") }]),
+			content: maybeN([{ type: pickFrom(["text", "image", "bogus"]), text: maybeN("C") }]),
+			error: maybeN({ name: maybeN("E") }), failure: maybeN({ message: maybeN("F") }),
+			message: maybeN("M"), code: maybeN("X"), type: maybeN("T"), data: maybeN({ d: 1 }),
+			usage: maybeN({ input: maybeN(10), output: maybeN(5) }),
+			timing: maybeN({ stepStartTime: maybeN(1), completedTime: maybeN(2) }),
+			producer: maybeN({ label: maybeN("p") }), name: maybeN("t"), argsRaw: maybeN("{}"),
+			requestConfig: maybeN({ model: maybeN("m") })
+		});
+		let fuzzFails = 0;
+		let firstMessage = null;
+		for (let round = 0; round < 300; round += 1) {
+			const list = Array.from({ length: 1 + Math.floor(rnd() * 8) }, mkNasty);
+			// Guarantee the `assistant` fold runs every round: it is the branch that reads
+			// `step`, and letting the kind be random left that path under-exercised.
+			list[0].kind = "assistant";
+			try {
+				deriveTraceTree({
+					eventNodes: maybeN(list), requests: maybeN([]), callSchemas: maybeN(new Map()), runningCalls: maybeN({}),
+					partial: rnd() < 0.5 ? null : { turn: maybeN(1), step: maybeN(1), blocks: maybeN([{ kind: "text", text: "p" }]), timing: maybeN({}) }
+				}, t);
+			} catch (e) {
+				fuzzFails += 1;
+				if (firstMessage === null) firstMessage = e.constructor.name + ": " + String(e.message).slice(0, 70);
+			}
+		}
+		if (fuzzFails > 0) throw new Error("HOSTILEFIELDS1 " + fuzzFails + "/300 hostile snapshots threw, first: " + firstMessage);
+	}
+
 	// ── SEQCOERCE1: a BigInt/Symbol `seq` must not refuse to render the log ────
 	// `seq` is the field the whole projection orders by (`a.seq - b.seq`), compares
 	// (`>`) and pastes into ids (template literals). JS THROWS on a Symbol in all three
