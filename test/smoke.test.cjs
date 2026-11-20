@@ -1921,6 +1921,34 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 		if (ordered.stations.map((st) => st.id).join(",") !== "u2,u10,u30") {
 			throw new Error("SEQCOERCE1 ordering is not numeric: " + ordered.stations.map((st) => st.id).join(","));
 		}
+		// `step` reaches the same coercion from the same log. `Number(Symbol)` throws, and
+		// three call sites did exactly that, so a Symbol `step` crashed the projection
+		// just like a Symbol `seq` did.
+		const stepCase = (step, expect) => {
+			// Wrap the projection itself: if the coercion is broken it throws a raw
+			// TypeError from inside the fold, which kills the whole process and reports a
+			// stack instead of naming this guard.
+			let tr = null;
+			try {
+				tr = deriveTraceTree({
+				eventNodes: [{ kind: "assistant", seq: 2, time: 1e12, turn: 1, step, messageId: "m", blocks: [{ kind: "text", text: "a" }] }],
+					requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+				}, t);
+			} catch (e) {
+				throw new Error("SEQCOERCE1 step=" + String(step) + " crashed the projection: " + String(e.message).slice(0, 60));
+			}
+			const st = tr.stations.find((x) => x.kind === "step");
+			if (st === void 0) throw new Error("SEQCOERCE1 a step station vanished for step=" + String(step));
+			if (st.turnStep !== expect) {
+				throw new Error("SEQCOERCE1 step=" + String(step) + " produced turnStep " + st.turnStep + ", expected " + expect);
+			}
+		};
+		stepCase(Symbol("s"), 1);
+		stepCase(3n, 3);
+		stepCase(2.7, 2);
+		stepCase(-5, 1);
+		stepCase(void 0, 1);
+		stepCase("7", 7);
 		// The repair must be NON-DESTRUCTIVE: the host's snapshot objects are shared with
 		// every other view in the app, so rewriting their `seq` in place would corrupt
 		// another consumer. Copy instead of mutate.
