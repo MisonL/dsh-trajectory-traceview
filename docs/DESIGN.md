@@ -5372,3 +5372,57 @@ function numOr(v, fallback) { return Number.isSafeInteger(v) ? String(v) : (fall
 
 - 灌进去的是构造快照，"turn 真的是 NaN"这种日志在真实会话里怎么产生，没有确认。
 - 仍未跑真实浏览器。
+
+### 12.95 第二十四轮：面板整块白屏——BigInt 时间戳、Symbol 字段、NaN 载荷（2026-11-20）
+
+#### 一直只打「纯函数」，从没打「渲染」
+
+此前所有恶意快照测试都走两条路：**纯函数**（`deriveTraceTree` / Markdown）和**干净的组件渲染**。恶意数据从没灌进 React 组件。
+
+灌进去，150 轮里有 1~6 轮**整块白屏**——React 一旦抛异常，整个子树什么都不渲染。
+
+| 崩溃点 | 触发数据 | 错误 |
+|---|---|---|
+| `curEdge - prevEdge`（空档带） | BigInt 时间戳 | `Cannot mix BigInt and other types` |
+| 同上 | Symbol 时间戳 | `Cannot convert a Symbol value to a number` |
+| `` id: `t${b.callId}` `` | Symbol callId | 模板字符串 ToString |
+| `provider` / `retryState` 当 React 子节点 | Symbol | ToString |
+| `` `code: ${s.code}` `` | Symbol code | ToString |
+| `count` / `tokens` | Symbol | ToString |
+
+#### 修法
+
+| 位置 | 做法 |
+|---|---|
+| 空档带 | `Number.isFinite(prevEdge) && Number.isFinite(curEdge)`——对 BigInt/Symbol **都返回 false 且不抛** |
+| cell id | `cellId(prefix, callId, ordinal)`：字符串原样（锚点 `tvp1:c<callId>` 要它），其余用站内序号——React key 只需要唯一 |
+| `code` | 收紧成「字符串或 `undefined`」。渲染处判 `!= null` 和 `!== ""`，**空串会变成空 chip**，所以不能直接用 `asText` 的 `""` |
+| `provider` / `retryState` | `asText` |
+| `count` / `tokens` | `Number.isSafeInteger` |
+| NaN 载荷 | `JSON.stringify(NaN)` 是字符串 `"null"`，未知站点印出字面 `null` → `safeJsonPreview` 对 `null` / `undefined` / 非有限数字返回空串 |
+
+修完 150 轮：崩溃 0、泄漏 0。
+
+#### 变异测试抓出了我自己的两个盲点
+
+| 变异 | 只加随机轮时 | 加确定性用例后 |
+|---|---|---|
+| `gap` 去掉 `Number.isFinite` | 红 | 红 |
+| `count` 回到 raw | 红 | 红 |
+| `provider` 回到 raw | **绿** | 红 |
+| retry `code` 回到 raw | **绿** | 红 |
+
+原因：**详情面板只渲染"当前选中的站点"，而总览默认选最后一个**。恶意的 retry 必须恰好排在最后，才会被渲染到。随机池里这个概率太低。
+
+这和 §12.94 的「随机 fuzz 抓不住低频字段」是同一个教训，但这次是**同一轮里第二次**：我以为已经学会了，结果新写的守卫立刻又犯。所以 `RENDERFUZZ1` 现在带 7 个确定性用例（Symbol retry 字段 / Symbol compaction 计数 / Symbol error code / Symbol command 字段 / NaN payload / BigInt 时间戳 / Symbol 时间戳）。
+
+#### 一条没有变异能证明的加固
+
+`proseSafe` 从 `String(content ?? "")` 改成 `asText(content)`。但所有上游归一之后，**Symbol 已经到不了它**，所以这条改动没有可达触发点，也不存在能证明它的变异——把这条变异打回去，测试**仍然是绿的**。
+
+它是 choke point 上的纵深防御，不是被验证过的修复。**留着，但不假装它被证明了。** 写在这里就是为了让下一个人知道：这条改动没有证据。
+
+#### 未验证
+
+- 仍是 `react-dom/server`；真实浏览器里这些异常会不会被外层 ErrorBoundary 接住、表现成什么样子，没验证。
+- 仍未跑真实浏览器。
