@@ -202,6 +202,40 @@
 		fail("the harness cannot switch themes");
 	}
 
+	// 8b) a host remount must not throw the reader back to "overview, empty search".
+	// The host unmounts this panel on every tab switch (measured root count 0 → 1), so
+	// without persisted state the reader loses their place every single time.
+	if (typeof window.__remount === "function") {
+		const stepForResume = opts().findIndex((o) => (o.getAttribute("aria-label") || "").indexOf("步骤") >= 0);
+		if (stepForResume < 0) fail("no step station to test resume with");
+		else {
+			opts()[stepForResume].click();
+			await tick(200);
+			const searchEl = document.querySelector("input.dstv_searchInput:not(.dstv_anchorInput)");
+			const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(searchEl), "value").set;
+			setter.call(searchEl, "报错");
+			searchEl.dispatchEvent(new Event("input", { bubbles: true }));
+			await tick(200);
+			const beforeIdx = selected().slice();
+			window.__remount();
+			await tick(600);
+			const afterIdx = selected().slice();
+			const afterQuery = (document.querySelector("input.dstv_searchInput:not(.dstv_anchorInput)") || {}).value;
+			if (afterIdx.join() !== beforeIdx.join()) fail("a remount lost the selection: " + beforeIdx.join() + " -> " + afterIdx.join());
+			if (afterQuery !== "报错") fail("a remount lost the search query: " + JSON.stringify(afterQuery));
+			// …and it must NOT leak into a different conversation.
+			window.__remount({ sessionKey: "session-2" });
+			await tick(600);
+			const otherIdx = selected().slice();
+			const otherQuery = (document.querySelector("input.dstv_searchInput:not(.dstv_anchorInput)") || {}).value;
+			if (otherIdx.length !== 0) fail("view state leaked into another session: " + otherIdx.join());
+			if (otherQuery !== "") fail("the search query leaked into another session: " + JSON.stringify(otherQuery));
+			info.resume = { before: beforeIdx.join(), after: afterIdx.join(), query: afterQuery, leaked: otherIdx.length };
+		}
+	} else {
+		fail("the harness cannot remount the view");
+	}
+
 	// 9) the host PINS the box: a view taller than its flex parent must scroll internally,
 	//    never overflow into a host that clips it. This is the bug that shipped once: box
 	//    501px, content 692px, overflow visible, and the bottom 191px was unreachable.

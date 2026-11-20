@@ -133,6 +133,17 @@
 	window.__render();
 
 	/* ---- helpers the tests drive from outside ---- */
+	/**
+	 * Mimic what the host does on a tab switch: unmount the panel and mount a fresh one.
+	 * The probe uses this to prove view state survives a remount — and to prove it does
+	 * NOT leak into another conversation.
+	 */
+	window.__remount = function (overrides) {
+		root.unmount();
+		root = ReactDOM.createRoot(seat);
+		window.__render(overrides);
+		return true;
+	};
 	/** Host theme switch, on the SAME element the host uses (<body>). */
 	window.__setTheme = function (dark) {
 		if (dark === true) document.body.setAttribute("data-ds-dark-theme", "true");

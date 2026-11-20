@@ -54,7 +54,7 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**9 个原样保留、15 个被修改、0 个被删除**；本仓**新增 43 个**。
+上游 24 个函数：**9 个原样保留、15 个被修改、0 个被删除**；本仓**新增 46 个**。
 
 ### 原样保留（9）
 
@@ -90,7 +90,7 @@
 - `subDetailOf`
 - `textOfContent`
 
-### 本仓新增（43）
+### 本仓新增（46）
 
 上游完全没有：
 
@@ -122,6 +122,7 @@
 - `promptTextDiff`
 - `proseSafe`
 - `pushSubLines`
+- `readViewState`
 - `renderMdInline`
 - `resolveAnchorInStations`
 - `safeHref`
@@ -137,6 +138,8 @@
 - `stepOf`
 - `toolSchemaKey`
 - `unknownNodeStats`
+- `viewStateKey`
+- `writeViewState`
 
 
 ## 三、怎么用它
