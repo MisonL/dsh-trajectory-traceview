@@ -5426,3 +5426,77 @@ function numOr(v, fallback) { return Number.isSafeInteger(v) ? String(v) : (fall
 
 - 仍是 `react-dom/server`；真实浏览器里这些异常会不会被外层 ErrorBoundary 接住、表现成什么样子，没验证。
 - 仍未跑真实浏览器。
+
+### 12.96 第二十五轮：第一次在真浏览器里跑（2026-11-20）
+
+#### 之前的「最大缺口」是什么
+
+所有渲染证据都来自 `react-dom/server`。它能证明**结构**，证明不了**行为**：
+
+| 只能真机测的 | 为什么 SSR 测不到 |
+|---|---|
+| 滚动位置、`scrollIntoView` | 需要布局 |
+| 焦点 / roving tabindex | 需要真实 `activeElement` |
+| `navigator.clipboard` | 需要浏览器权限模型 |
+| `setInterval` 回放 | 需要真实计时 |
+| `@media` 响应式 | 需要真实视口 |
+| `max-height` + 内部滚动 | 需要真实布局 |
+
+这一轮把这些全部补上了：`agent-browser`（Chrome via CDP）真的把插件挂起来跑。
+
+#### 怎么搭的
+
+React 19 不再提供 UMD 构建，所以 `scripts/browser-harness.mjs` 内置了一个极小的 CommonJS loader，把 `react` / `react-dom` / `scheduler` / `jsx-runtime` 的 CJS 源码包进一个独立 HTML，再拼上 `lib/client.js`。
+
+`test/browser/fixture.js` 走**真实入口**：调用插件的 `apply(ctx)`，用一个假的 `ctx.slots.register` 捕获组件，然后用外部 store 驱动 `useTrajectory` / `useSession`——所以流式更新是真的会重渲染。页面还带宿主外壳（120px 头部、96px 固定 composer、2200px 长页面）和真实的 `--dsw-alias-*` 主题变量。
+
+这些**故意不进冒烟测试**：冒烟必须能在没有浏览器的机器上跑。它们由 `node scripts/browser-check.mjs` 驱动，独立门禁。
+
+#### 真机测出的第一个真 bug
+
+375px 宽 + 搜索框里输入了词之后：
+
+```
+搜索条宽度 359px，可用 351px → 右边缘 384 > 视口 375
+document.scrollWidth = 384  →  整页横向滚动 9px
+```
+
+`react-dom/server` 永远看不到这个数：`scrollWidth` 是布局属性。
+
+输入之前是 148px（放得下），一输入就多出计数器 + 「仅已加载范围」+ ↑ + ↓ + ✕，撑爆。
+
+修法：`.dstv_search` 加 `flex-wrap:wrap; max-width:100%; justify-content:flex-end`。窄屏下控件换行，而不是溢出。
+
+实测（375px、输入「报错」）：搜索条 325px、两行、40px 高，`scrollWidth = 375`，**无横向滚动**。1280px 下仍是 407px 单行——没有回退。
+
+#### 真机确认通过的（以前全是「未验证」）
+
+| 行为 | 实测结果 |
+|---|---|
+| 点站点 | 选中、roving tabindex 跟随、卡片滚进视野（`scrollLeft` 240） |
+| `→` / `←` | 逐格移动，**始终滚进视野** |
+| `Home` / `End` | 回到第一站 / 回到总览（无选中，符合设计） |
+| 搜索刚输入 | 计数器 `–/3 命中`——**不谎报位置** |
+| 第一次 `↓` | 落在第 1 个命中，并滚动到位 |
+| `↑` | 环形回绕到最后一个命中 |
+| ↑/↓ 按钮 | 有可访问名（「上一个命中」/「下一个命中」） |
+| 复制锚点 | 真的调用 `navigator.clipboard.writeText`，内容 `tvp1:e2` |
+| 回放 | 定时器推进（1 → 2），暂停后停住 |
+| 详情面板 | 超长内容内部滚动（`scrollTop` 有上限），**页面高度不增长** |
+| 主题 token | 全部可解析（我第一版 harness 写错了变量前缀 `--dsv-`，全站样式静默失效——这本身就说明「token 缺失」只能真机发现） |
+| 可交互元素 | 都有可访问名；无运行时报错 |
+
+#### 探针自己错了三次（记下来）
+
+1. `.click()` 后**同步**读状态 → React 还没 flush，读到旧值。要 `await` 一帧。
+2. 以为按钮有 `aria-label` → 实际「🔗 复制锚点」的可访问名来自**文本内容**。
+3. `document.querySelector(".dstv_search")` 拿到的是**锚点**那条，不是搜索那条。
+
+三次都是「先怀疑产品」，实际是探针写错。这已经是第 N 次——**先验探针**这条规则仍然在生产事故。**
+
+#### 仍未验证
+
+- **真实操作系统剪贴板**：headless 里 `clipboard.readText()` 权限被拒，只验到"组件确实调用了 API、传的字节对"。
+- **真实读屏软件**（NVDA / VoiceOver）：仍只有 ARIA 属性层面的证据。
+- **真实 DSH 宿主里的注入**：harness 用的是假 `ctx`。
+- **真机触屏**：只有 375px 视口，没有真实手指滚动。

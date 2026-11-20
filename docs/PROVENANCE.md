@@ -27,6 +27,8 @@
 
 - `docs/DESIGN.md`
 - `docs/PROVENANCE.md`
+- `scripts/browser-check.mjs`
+- `scripts/browser-harness.mjs`
 - `scripts/build-client.mjs`
 - `scripts/provenance.mjs`
 - `src/00-locale.js`
@@ -35,6 +37,18 @@
 - `src/30-helpers.js`
 - `src/40-view.js`
 - `src/50-entry.js`
+- `test/browser/fixture.js`
+- `test/browser/harness.html`
+- `test/browser/probe.js`
+- `test/browser/shots/screenshot-1795154191788.png`
+- `test/browser/shots/screenshot-1795155420814.png`
+- `test/browser/shots/screenshot-1795155624093.png`
+- `test/browser/shots/screenshot-1795155625388.png`
+- `test/browser/shots/screenshot-1795155846462.png`
+- `test/browser/shots/screenshot-1795155847319.png`
+- `test/browser/shots/screenshot-1795155941576.png`
+- `test/browser/shots/screenshot-1795155942686.png`
+- `test/browser/shots/screenshot-1795156006157.png`
 
 ## 二、`lib/client.js` 函数级
 
