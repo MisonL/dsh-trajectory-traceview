@@ -259,6 +259,50 @@
 			} catch { /* storage disabled or full: behave exactly as before */ }
 		}
 
+		/**
+		 * One minimap tick. Memoised because the strip renders ONE BUTTON PER STATION and
+		 * every `→` used to re-render all of them: measured 148ms median at 15 stations,
+		 * 927ms at 135 (≈6.5ms per station, DESIGN §13.03). Only the ticks whose
+		 * `reached`/`active`/`dim` actually change need to re-render.
+		 *
+		 * The comparator deliberately compares DATA ONLY and ignores `onSeek`: the parent's
+		 * closure identity changes on every render, so including it would defeat the point.
+		 * That is safe because every station-count change also changes the `station`
+		 * identities, which forces a real re-render (and a fresh closure).
+		 */
+		const MinimapTick = (0, react.memo)(function MinimapTick(props) {
+			const s = props.station;
+			const i = props.idx;
+			let k = s.kind;
+			if (s.kind === "step") k = s.cells.some((c) => c.kind === "tool") ? "tool" : "step";
+			if (s.kind === "maxTokens") k = "error";
+			const done = props.reached === true && (s.kind !== "step" || !s.live);
+			const suffix = props.clockText !== "" ? ` · ${props.clockText}` : "";
+			const label = `${props.positionLabel} ${String(i + 1)} / ${String(props.count)} · ${props.label}${suffix}`;
+			return jsx("button", {
+				type: "button",
+				className: "dstv_miniTick",
+				"data-tick-idx": String(i),
+				"data-k": k,
+				"data-done": done ? "true" : void 0,
+				"data-dim": props.dim,
+				"data-active": props.active === true ? "true" : void 0,
+				"data-live": s.kind === "step" && s.live === true ? "true" : void 0,
+				"data-match": props.matched === true ? "true" : void 0,
+				// Roving tabindex, same rule as the station list: this strip is a SECOND
+				// navigation affordance for the SAME stations, and leaving every tick tabbable
+				// made it N extra Tab stops. Exactly one tick stays reachable, or the strip
+				// disappears from the keyboard in the overview state.
+				tabIndex: props.active === true || (props.revealedMode !== true && i === 0) ? 0 : -1,
+				title: `${props.label}${suffix}`,
+				"aria-label": label,
+				onClick: (ev) => { ev.stopPropagation(); props.onSeek(i); }
+			}, `mini${i}`);
+		}, (prev, next) => prev.station === next.station && prev.idx === next.idx && prev.count === next.count
+			&& prev.reached === next.reached && prev.matched === next.matched && prev.dim === next.dim
+			&& prev.active === next.active && prev.revealedMode === next.revealedMode
+			&& prev.label === next.label && prev.clockText === next.clockText && prev.positionLabel === next.positionLabel);
+
 		function TraceMapView({ useSession, useTrajectory, t, viewRequest, completeViewRequest, loadOlder, sessionKey }) {
 			const scrollerRef = (0, react.useRef)(null);
 			const minimapRef = (0, react.useRef)(null);
@@ -1436,37 +1480,20 @@
 				className: "dstv_minimap",
 				ref: minimapRef,
 				children: stations.map((s, i) => {
-					const reached = i < R;
-					let k = s.kind;
-					if (s.kind === "step") k = s.cells.some((c) => c.kind === "tool") ? "tool" : "step";
-					if (s.kind === "maxTokens") k = "error";
-					const done = reached && (s.kind !== "step" || !s.live);
 					const matched = searching && matchSet.has(i);
-					return jsx("button", {
-						type: "button",
-						className: "dstv_miniTick",
-						"data-tick-idx": String(i),
-						"data-k": k,
-						"data-done": done ? "true" : undefined,
-						"data-dim": reached ? (searching && !matched ? "true" : undefined) : "true",
-						"data-active": revealed !== null && i === R - 1 ? "true" : undefined,
-						"data-live": s.kind === "step" && s.live === true ? "true" : undefined,
-						"data-match": matched ? "true" : undefined,
-						// Roving tabindex, same as the station list. This strip is a SECOND
-						// navigation affordance for the SAME stations: leaving every tick
-						// tabbable made it N extra Tab stops (measured 200 at 200 stations,
-						// so 3,600 on a long session) that a keyboard user had to cross to
-						// reach the panel below — for a control that only seeks.
-						// ...but exactly one tick must stay reachable, or the whole strip
-						// disappears from the keyboard in the overview state. Same rule as
-						// the station list: the active one, else the first.
-						tabIndex: (revealed !== null && i === R - 1) || (revealed === null && i === 0) ? 0 : -1,
-						// `s.label` is undefined for user stations, so the tooltip read
-						// "undefined · 6:13:20 AM" and the button had no accessible name at
-						// all. Fall back to the kind and always expose aria-label.
-						title: `${minimapTickLabel(s)}${fmtClock(s.time) !== "" ? ` · ${fmtClock(s.time)}` : ""}`,
-						"aria-label": `${t("detail.position")} ${String(i + 1)} / ${String(stations.length)} · ${minimapTickLabel(s)}${fmtClock(s.time) !== "" ? ` · ${fmtClock(s.time)}` : ""}`,
-						onClick: (ev) => { ev.stopPropagation(); seek(i); }
+					return jsx(MinimapTick, {
+						station: s,
+						idx: i,
+						count: stations.length,
+						reached: i < R,
+						matched: matched,
+						dim: i < R ? (searching && !matched ? "true" : void 0) : "true",
+						active: revealed !== null && i === R - 1,
+						revealedMode: revealed !== null,
+						label: minimapTickLabel(s),
+						clockText: fmtClock(s.time),
+						positionLabel: t("detail.position"),
+						onSeek: seek
 					}, `mini${i}`);
 				})
 			}, "rootMini");
