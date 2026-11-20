@@ -1881,6 +1881,40 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── EXPORTDRIFT1: the saved file must carry the panel's warnings ───────────
+	// The header tells the reader "this log is damaged" (malformed / drift / invalid) and,
+	// since round 20, "N requests have no matching step". The Markdown export stated only
+	// the totals, so a saved file silently claimed a clean read of a log the screen was
+	// actively flagging — the same defect shape as the dropped error `code` (§12.82).
+	{
+		const nodesEd = [
+			{ kind: "user", seq: 1, time: 1e12, turn: 1, content: [{ type: "text", text: "u" }] },
+			{ kind: "assistant", seq: 2, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }
+		];
+		const exportOf = (requests, eventNodes) => buildTraceMarkdown(
+			deriveTraceTree({ eventNodes: eventNodes ?? nodesEd, requests, callSchemas: new Map(), runningCalls: [], partial: null }, t), t);
+		const warnsOf = (md) => md.split("\n").filter((line) => line.indexOf("> ⚠") === 0);
+		const cleanMd = exportOf([{ purpose: "assistant", turn: 1, step: 1 }]);
+		if (warnsOf(cleanMd).length !== 0) {
+			throw new Error("EXPORTDRIFT1 a clean log must not be flagged: " + warnsOf(cleanMd)[0]);
+		}
+		// An unplaceable request must be reported in the file, not only on screen.
+		const reqWarn = warnsOf(exportOf([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "assistant", turn: 9, step: 1 }]));
+		if (reqWarn.length === 0 || reqWarn[0].indexOf("unplacedReq") < 0) {
+			throw new Error("EXPORTDRIFT1 the export hides a request that has no matching step");
+		}
+		// An unknown node kind must be reported.
+		const driftWarn = warnsOf(exportOf([], nodesEd.concat([{ kind: "brand-new-kind", seq: 3, time: 1e12, turn: 1 }])));
+		if (driftWarn.length === 0 || driftWarn[0].indexOf("drift") < 0) {
+			throw new Error("EXPORTDRIFT1 the export hides an unrecognised node kind");
+		}
+		// A malformed node shape must be reported.
+		const malWarn = warnsOf(exportOf([], nodesEd.concat([{ kind: "user", seq: "x", time: 1e12, turn: 1 }])));
+		if (malWarn.length === 0 || malWarn[0].indexOf("malformed") < 0) {
+			throw new Error("EXPORTDRIFT1 the export hides a malformed snapshot");
+		}
+	}
+
 	// ── UNPLACEDREQ1: a request the log carries must never be dropped in silence ──
 	// `requests` are keyed by `${turn}:${step}` and attached while stations are built.
 	// A request whose step never appears (a request that failed before producing a
