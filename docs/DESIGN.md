@@ -5271,3 +5271,44 @@ for (const n of nodes) {
 
 - `seq` 为 `null`（损坏日志）时，该节点一律**包含**在重建结果里。无法判断先后，选择"多给"而不是"悄悄少给"。这是刻意取舍，未在真实坏日志上验证。
 - 仍未跑真实浏览器。
+
+### 12.93 第二十三轮：面板里会打印字面的「undefined」（2026-11-20）
+
+#### `JSON.stringify` 的返回类型陷阱
+
+```js
+text = JSON.stringify(value, null, pad);
+if (typeof text !== "string") text = String(text);
+```
+
+看起来是防御。实际上 `JSON.stringify` 对**它表示不了的值**返回的是 `undefined`（不是字符串）——裸 `Symbol`、函数、以及 `undefined` 本身。于是 `String(undefined)` 得到 `"undefined"`，未知站点的 payload 预览里就出现了字面的 `undefined`。
+
+读起来像查看器自己坏了，而不是"这条载荷没法表示"。
+
+#### 修法
+
+`describeUnrepresentable()`：
+
+| 值 | 现在显示 |
+|---|---|
+| `undefined` | `""`（什么都没记） |
+| `Symbol("s")` | `"Symbol(s)"` |
+| `() => 1` | `"[function]"` |
+| 其他 | `"[类型名]"` |
+
+快路径和循环引用回退路径两处都换掉。
+
+#### 旧守卫需要跟着改
+
+`R4` 原来写的是"`safeJsonPreview(undefined)` 必须是 `undefined` 或字符串 `'undefined'`"——它把旧的（有问题的）行为当成了契约。改成：接受空串，并新增一条"Symbol / 函数载荷绝不能渲染成 `undefined`"。
+
+**旧守卫会保护旧 bug。** 改行为时必须回头看看有没有守卫把旧行为钉死了——这次钉死它的甚至是一条"防御性"断言。
+
+#### 变异
+
+把 `describeUnrepresentable` 换回 `String(text)` → 红（`R4 a non-serialisable payload leaked as "undefined"`）。
+
+#### 未验证
+
+- 中文/英文 locale 下这个占位符没有单独翻译（`[function]` / `[symbol]` 是代码里的字面量）。**已知取舍**，因为它们是技术标识而非文案。
+- 仍未跑真实浏览器。
