@@ -528,14 +528,20 @@
 				if (n.kind === "user" || n.kind === "steering" || n.kind === "context") {
 					out.push({ role: "user", seq: n.seq ?? null, content: n.content ?? [], text: blocksText(n.content, tr) });
 				} else if (n.kind === "assistant") {
-					const content = (n.blocks ?? []).map((b) => {
+					// `deriveTraceTree` hardens `blocks` on its own, but the request tab rebuilds
+					// from the RAW node. A single `null` block made this map read `.kind` off
+					// null and took the whole panel down (measured: TypeError inside the render
+					// boundary's sibling `useMemo`, so the boundary never caught it).
+					const rawBlocks = Array.isArray(n.blocks) ? n.blocks : [];
+					const blocks = rawBlocks.filter((b) => b != null && typeof b === "object");
+					const content = blocks.map((b) => {
 						if (b.kind === "tool-call") return { type: "tool-call", id: b.callId, name: b.name, arguments: b.argsRaw };
 						if (b.kind === "reasoning") return { type: "reasoning", text: b.text };
 						if (b.kind === "text") return { type: "text", text: b.text };
 						if (b.kind === "image") return { type: "image", attachment: b.attachment };
 						return { type: "other", data: b.block };
 					});
-					const text = (n.blocks ?? []).map((b) => (b.kind === "text" ? b.text : b.kind === "reasoning" ? b.text : "")).join("\n").trim();
+					const text = blocks.map((b) => (b.kind === "text" ? b.text : b.kind === "reasoning" ? b.text : "")).join("\n").trim();
 					out.push({ role: "assistant", seq: n.seq ?? null, content, text });
 				} else if (n.kind === "tool-result") {
 					out.push({ role: "tool", seq: n.seq ?? null, content: n.content ?? [], toolCallId: n.callId, isError: n.isError === true, text: blocksText(n.content, tr) });
@@ -1035,7 +1041,22 @@
 			// Keys that actually found a step. Anything left over is a request the log
 			// recorded but this view could not place; it must be reported, not discarded.
 			{
-				const reqs = safeList(snap?.requests).sort((a, b) => a.startSeq - b.startSeq);
+				// `startSeq` comes from the host record. Subtracting a Symbol throws
+				// (`Cannot convert a Symbol value to a number`) and a BigInt throws too, so one
+				// malformed request used to take the entire projection down before any station
+				// existed. Sort only on finite numbers; anything else keeps its relative order
+				// at the end instead of entering the comparator arithmetic.
+				const seqOrder = (v) => (typeof v === "bigint" ? Number(v) : v);
+				const reqs = safeList(snap?.requests).sort((a, b) => {
+					const x = seqOrder(a?.startSeq);
+					const y = seqOrder(b?.startSeq);
+					const xf = Number.isFinite(x);
+					const yf = Number.isFinite(y);
+					if (xf && yf) return x - y;
+					if (xf) return -1;
+					if (yf) return 1;
+					return 0;
+				});
 				let lastPrompt = null;
 				for (const r of reqs) {
 					if (r?.purpose === "compaction") { compactionReqs.push(r); continue; }
@@ -2400,9 +2421,14 @@
 				L.push("");
 				L.push(...fencedBlock(firstPrompt.system));
 				L.push("</details>");
-				if (firstPrompt.tools.length > 0) {
+				// The request tab renders this catalog through `safeToolList`; the export path
+				// read the RAW array and crashed on a `null` hole (`Cannot read properties of
+				// null (reading 'name')`), so clicking "copy whole trace" produced nothing at
+				// all. Use the same normalizer here.
+				const exportTools = safeToolList(firstPrompt.tools);
+				if (exportTools.length > 0) {
 					L.push("");
-					L.push(`**${t("detail.toolsCatalog")} (${firstPrompt.tools.length})**: ${firstPrompt.tools.map((tool) => `\`${tool.name}\``).join(" ")}`);
+					L.push(`**${t("detail.toolsCatalog")} (${exportTools.length})**: ${exportTools.map((tool) => `\`${tool.name}\``).join(" ")}`);
 				}
 			}
 			L.push("");

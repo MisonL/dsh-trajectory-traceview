@@ -6056,3 +6056,28 @@ beforeSeq=4，节点 seq=[1,3,5,null]
 ③ 里我判断"清单本身有错、只有 `shadowedTokenCount` 缺守卫"——那是针对**我自己的**旧清单。Codex 这份是全新角度，覆盖面明显更宽（它去核对了 DSH 0.2.2-rc.2 的真实 `.d.ts` 契约字段，例如 `providerMetadata.model`、`ToolResultNode.name` 恒存在）。
 
 这些缺陷**尚未修复**，单独排期。
+
+### 13.14 修掉 §13.13 的三条崩溃路径（2026-11-20）
+
+Codex 报的 11 条里，三条是**白屏级**：都在任何 station 组装之前抛错，所以 `RenderBoundary` 根本接不住（它只包卡片，不包 `useMemo` 与导出）。
+
+| # | 位置 | 触发 | 修法 |
+|---|---|---|---|
+| 1 | `reconstructMessages` | `blocks:[null]` → 读 null 的 `.kind` | `Array.isArray` + 过滤非对象块；该方法读的是**原始 node**，`deriveTraceTree` 的加固不适用 |
+| 2 | `buildTraceMarkdown` 附录 | `prompt.tools:[null]` → 读 null 的 `.name` | 改用请求页签早就在用的 `safeToolList` |
+| 3 | `requests.sort` | `startSeq` 是 Symbol/BigInt → 减法抛 `Cannot convert a Symbol value to a number` | 先归一化，只有有限数值参与减法，其余稳定置后 |
+
+#### 变异证据（三条全红）
+
+```
+变异 a（不过滤坏 block）→ HOSTILE2 a null assistant block crashed the request rebuild
+变异 b（exportTools 用原始数组）→ HOSTILE2 a null prompt tool crashed the markdown export
+变异 c（去掉有限性判断）→ HOSTILE2 a non-numeric startSeq crashed the request sort
+恢复 → 绿
+```
+
+守卫 90 → 93。
+
+#### 仍未修
+
+§13.13 余下 8 条（compaction request 丢弃、`providerMetadata.model`、orphan 丢 `name`、sub-call 导出截断无标记、KPI 忽略 node usage、partial 多 text 只留第一段、非字符串 callId 消失、重复 orphan id）**仍在**。它们不崩溃，但都属于"静默丢数据 / 说谎的界面"，需要单独的语义决策（例如 KPI 是否该含子调用错误），我留给下一轮而不是顺手改——顺手改正是 §13.11 那个回退的成因。

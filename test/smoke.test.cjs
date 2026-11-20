@@ -4416,6 +4416,43 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	const h5 = nextHashFor("#keep", null);
 	if (h5.hash !== "#keep" || h5.changed !== false) throw new Error("G2 must tolerate a missing anchor");
 
+	// ── HOSTILE2: three malformed-host shapes must not take the panel down ──
+	// All three were reproduced against the real DSH 0.2.2-rc.2 record shapes and each
+	// one threw BEFORE any station existed, so the render boundary could not catch it.
+	{
+		// (a) the request tab rebuilds from RAW nodes; `deriveTraceTree` hardening does not apply.
+		try {
+			const rebuilt = reconstructMessages([{ kind: "assistant", seq: 1, blocks: [null] }], 2, t);
+			if (rebuilt.length !== 1) throw new Error("expected one rebuilt message, got " + rebuilt.length);
+		} catch (e) {
+			throw new Error("HOSTILE2 a null assistant block crashed the request rebuild: " + String(e.message).slice(0, 70));
+		}
+		// (b) the export appendix reads the raw prompt catalog; a null hole used to throw.
+		try {
+			const trTools = deriveTraceTree({
+				eventNodes: [{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, blocks: [{ kind: "text", text: "ok" }] }],
+				requests: [{ purpose: "assistant", startSeq: 1, turn: 1, step: 1, status: "ok", prompt: { system: "s", tools: [null] } }],
+				callSchemas: new Map(), runningCalls: [], partial: null
+			}, t);
+			buildTraceMarkdown(trTools, t);
+		} catch (e) {
+			throw new Error("HOSTILE2 a null prompt tool crashed the markdown export: " + String(e.message).slice(0, 70));
+		}
+		// (c) sorting requests on a non-numeric startSeq used to throw before any station.
+		try {
+			deriveTraceTree({
+				eventNodes: [],
+				requests: [
+					{ purpose: "assistant", startSeq: Symbol("a"), turn: 1, step: 1 },
+					{ purpose: "assistant", startSeq: 1, turn: 1, step: 2 }
+				],
+				callSchemas: new Map(), runningCalls: [], partial: null
+			}, t);
+		} catch (e) {
+			throw new Error("HOSTILE2 a non-numeric startSeq crashed the request sort: " + String(e.message).slice(0, 70));
+		}
+	}
+
 	// ── NUMGUARD1: a non-integer "counts" field must become null, never a number
 	// `shadowedItemCount` / `shadowedTokenCount` come straight from the log. A corrupt
 	// value (3.5, a Symbol, a string) must be reported as "not recorded" — the old raw
