@@ -698,7 +698,21 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	const cyc = safeJsonPreview(circular, 200);
 	if (typeof cyc !== "string" || !cyc.includes("[Circular]")) throw new Error("R4 a cyclic payload must degrade to [Circular], got " + cyc);
 	if (safeJsonPreview({ a: 1 }, 3) !== '{"a…') throw new Error("R4 payload cap not applied: " + safeJsonPreview({ a: 1 }, 3));
-	if (safeJsonPreview(undefined, 10) !== undefined && safeJsonPreview(undefined, 10) !== "undefined") throw new Error("R4 an undefined payload must not throw");
+	// Accept the new honest empty string as well: printing the literal word "undefined"
+	// in the panel reads like a viewer bug rather than "nothing recorded".
+	{
+		const undefOut = safeJsonPreview(undefined, 10);
+		if (undefOut !== "" && undefOut !== undefined && undefOut !== "undefined") {
+			throw new Error("R4 an undefined payload must not throw, got " + JSON.stringify(undefOut));
+		}
+		// A Symbol / function payload must be named, never rendered as the word "undefined".
+		for (const odd of [Symbol("s"), () => 1]) {
+			const outOdd = safeJsonPreview(odd, 40);
+			if (typeof outOdd !== "string" || outOdd === "undefined") {
+				throw new Error("R4 a non-serialisable payload leaked as " + JSON.stringify(outOdd));
+			}
+		}
+	}
 	// And it must sit in its own turn rather than being glued onto an earlier one.
 	const uMixed = deriveTraceTree({ eventNodes: [
 		{ kind: "user", seq: 1, time: 1, content: [{ type: "text", text: "hi" }] },
