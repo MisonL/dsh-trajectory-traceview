@@ -69,7 +69,13 @@ const html = `<!doctype html>
 	#hostHead { height: 120px; background: #1b1f24; color: #fff; padding: 10px 16px; box-sizing: border-box; }
 	#hostSidebar { position: fixed; left: 0; top: 0; bottom: 0; width: 0; }
 	#hostMain { padding: 12px 16px; box-sizing: border-box; }
-	#seat { border: 1px dashed var(--dsw-alias-border-l2, #b3bac4); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); margin-bottom: 12px; }
+	/* Host-shaped seat: the flex parent pins the box height, so a view taller than it MUST
+	   scroll internally. Without this the harness can never reproduce that class of bug. */
+	#viewArea { display: flex; overflow-y: hidden; overflow-x: hidden; height: calc(100vh - 235px); }
+	#viewArea > #seat { display: contents; }
+	html[data-layout="free"] #viewArea { display: block; height: auto; overflow: visible; }
+	html[data-layout="free"] #viewArea > #seat { display: block; }
+	#seat > * { min-width: 0; }
 	#hostComposer { position: fixed; left: 0; right: 0; bottom: 0; height: 96px; background: var(--dsw-alias-bg-layer-2, #eef1f5); border-top: 1px solid var(--dsw-alias-border-l2, #cfd6df); padding: 10px 16px; box-sizing: border-box; }
 	/* Host theme tokens: the real stylesheet when the installed DSH is readable,
 	   otherwise a minimal light set (layout only, not dark-contrast evidence). */
@@ -83,7 +89,12 @@ const html = `<!doctype html>
 </head>
 <body>
 <div id="hostHead"><strong>host chrome</strong> (120px, stands in for the real header)</div>
-<div id="hostMain"><div id="seat"></div><div style="height: 2200px">（长页面，用于检验插件不会把整页无限撑高）</div></div>
+<div id="hostMain">
+  <!-- The host seats the view in a FLEX column with overflow:hidden and a fixed height.
+       append ?layout=free to the URL for the old grow-with-content seating. -->
+  <div id="viewArea"><div id="seat"></div></div>
+  <div style="height: 2200px">（长页面，用于检验插件不会把整页无限撑高）</div>
+</div>
 <div id="hostComposer"><div class="composerSeat" style="height:100%;display:flex;align-items:center"><strong>host composer</strong> (96px, fixed; class="composerSeat" is what the plugin measures)</div></div>
 
 <script>

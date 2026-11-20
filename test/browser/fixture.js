@@ -125,6 +125,7 @@
 		loadOlder: extra.loadOlder,
 		sessionKey: extra.sessionKey
 	};
+	if (new URLSearchParams(location.search).get("layout") === "free") document.documentElement.setAttribute("data-layout", "free");
 	window.__render = function (overrides) {
 		var p = Object.assign({}, viewProps, overrides || {});
 		root.render(React.createElement(captured.Component, p));

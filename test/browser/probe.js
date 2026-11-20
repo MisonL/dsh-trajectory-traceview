@@ -202,7 +202,64 @@
 		fail("the harness cannot switch themes");
 	}
 
-	// 9) tokens resolve (a missing host token silently kills the whole visual design)
+	// 9) the host PINS the box: a view taller than its flex parent must scroll internally,
+	//    never overflow into a host that clips it. This is the bug that shipped once: box
+	//    501px, content 692px, overflow visible, and the bottom 191px was unreachable.
+	const root = document.querySelector(".dstv_root");
+	const viewArea = root.parentElement;
+	const rootCS = getComputedStyle(root);
+	const boxH = Math.round(root.getBoundingClientRect().height);
+	const contentH = root.scrollHeight;
+	info.clamp = { boxH, contentH, overflowY: rootCS.overflowY };
+	if (contentH > boxH + 1) {
+		if (rootCS.overflowY === "visible") fail("the view is taller than its box but overflow-y is visible: the host clips the bottom " + (contentH - boxH) + "px");
+		const before = root.scrollTop;
+		root.scrollTop = 1e6;
+		await tick(200);
+		const maxScroll = root.scrollHeight - root.clientHeight;
+		if (maxScroll > 0 && Math.abs(root.scrollTop - maxScroll) > 2) fail("the view cannot scroll to its last pixel (scrollTop " + root.scrollTop + " of " + maxScroll + ")");
+		root.scrollTop = before;
+		await tick(120);
+	}
+	// Everything interactive must be REACHABLE: intersect each rect with every clipping
+	// ancestor first — comparing raw rects to the composer reported a phantom overlap.
+	const clippedRect = (el) => {
+		const r = el.getBoundingClientRect();
+		let box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+		for (let p = el.parentElement; p !== null; p = p.parentElement) {
+			const cs = getComputedStyle(p);
+			if (cs.overflowY !== "visible" || cs.overflowX !== "visible") {
+				const pr = p.getBoundingClientRect();
+				box = { left: Math.max(box.left, pr.left), top: Math.max(box.top, pr.top), right: Math.min(box.right, pr.right), bottom: Math.min(box.bottom, pr.bottom) };
+			}
+			if (p === document.body) break;
+		}
+		return box;
+	};
+	const seatEl = document.querySelector('[class*="composerSeat"]');
+	const unreachable = [];
+	for (const el of document.querySelectorAll(".dstv_root button")) {
+		const raw = el.getBoundingClientRect();
+		if (raw.width === 0 || raw.height === 0) continue;
+		const v = clippedRect(el);
+		if (v.width <= 0 || v.height <= 0) { unreachable.push((el.textContent || "").trim().slice(0, 12) + ": clipped away entirely"); }
+	}
+	if (unreachable.length > 0) fail(unreachable.length + " control(s) clipped away: " + unreachable.slice(0, 3).join(" | "));
+	if (seatEl !== null) {
+		const seat = seatEl.getBoundingClientRect();
+		root.scrollTop = 1e6;
+		await tick(200);
+		const underComposer = [...document.querySelectorAll(".dstv_root button")].filter((el) => {
+			const v = clippedRect(el);
+			return v.width > 0 && v.height > 0 && v.bottom > seat.top + 1 && v.top < seat.bottom;
+		});
+		root.scrollTop = 0;
+		await tick(120);
+		if (underComposer.length > 0) fail(underComposer.length + " control(s) sit under the host composer at max scroll");
+		info.clamp.underComposer = underComposer.length;
+	}
+
+	// 10) tokens resolve (a missing host token silently kills the whole visual design)
 	const rootStyle = getComputedStyle(document.querySelector(".dstv_root"));
 	const missingVars = ["--dsw-alias-border-l2", "--dsw-alias-label-primary", "--dsw-alias-bg-layer-1"]
 		.filter((v) => rootStyle.getPropertyValue(v).trim() === "");

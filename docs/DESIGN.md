@@ -5600,3 +5600,55 @@ detail max-height 46vh = 266px ← vh 是视口高度，不是容器高度
 所有 `react-dom/server` 测试、甚至我自己的 harness（宿主外壳是我自己写的）都**发现不了**这个问题：它只在"宿主把盒子钉死"时出现。harness 里 `#seat` 是普通块级元素，会随内容长高，所以永远绿。
 
 **我搭的 harness 不是宿主，它只是宿主形状的一次猜测。**
+
+### 12.99 更正 §12.98 的「7px 叠压」：不存在；并把宿主形状写进 harness（2026-11-20）
+
+#### 更正：那条 7px 是我算错了
+
+§12.98 结尾我记了「滚到底时一个『复制』按钮的下沿 7px 压在 composer 上沿」。**这条是错的。**
+
+原因：我拿 `getBoundingClientRect()` 的**原始矩形**去和 composer 比，没有考虑祖先的 `overflow` 裁剪。那个按钮在 `.dstv_dBody` 里（`overflow-y:auto`），它的盒子确实延伸到 456，但 449 以下的像素被自己的滚动容器裁掉了，根本画不出来。
+
+按「与每个裁剪祖先求交」重算：
+
+```
+按钮可见底 = min(按钮底, dBody 底, ...) = 449
+composer 顶 = 449
+→ 82 个按钮里 0 个真正被 composer 覆盖
+```
+
+**探针错第 7 次。** 这次我先写进了文档才验证——文档里的"已知问题"也可能是假的。
+
+#### harness 现在长得像宿主了
+
+之前 harness 的 `#seat` 是普通块级元素，会随内容长高，所以永远发现不了「宿主把盒子钉死」这类问题。现在改成宿主形状：
+
+```html
+<div id="viewArea" style="display:flex; overflow-y:hidden; height:calc(100vh-235px)">
+  <div id="seat" style="display:contents"></div>
+</div>
+```
+
+`?layout=free` 保留旧的自由布局用于对比。
+
+#### 新增守卫（browser-check 第 9 项）
+
+1. 内容比盒子高时，`overflow-y` **不能是 visible**（否则宿主会裁掉底部）；
+2. 必须能滚到最后一个像素（`scrollTop` 到达 `maxScroll`）；
+3. 每个可交互元素的**裁剪后可见矩形**不能为空；
+4. 滚到底时没有控件真正落在 composer 下面（这次用的是裁剪后矩形）。
+
+#### 变异验证
+
+去掉 `.dstv_root{overflow-y:auto}`（即回到今天修掉的状态）→ **红**：
+
+```
+✗ the view is taller than its box but overflow-y is visible: the host clips the bottom 315px
+✗ the view cannot scroll to its last pixel (scrollTop 0 of 315)
+```
+
+恢复后 PASS。**这一类 bug 现在能在门禁里复现了。**
+
+#### 自己的低级错误（第二次同类）
+
+往 `browser-harness.mjs` 的模板字符串里写 HTML 注释时带了反引号，直接把模板字面量截断，构建报 `SyntaxError`。上一次是把 `\n` 写进了单引号 JS 字符串。**手改生成器脚本时，先 `node --check` 再跑。**
