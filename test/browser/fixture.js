@@ -138,6 +138,43 @@
 	 * The probe uses this to prove view state survives a remount — and to prove it does
 	 * NOT leak into another conversation.
 	 */
+	/**
+	 * Deterministic in-page benchmark: N keyboard steps, each timed from dispatch to the
+	 * frame that follows. Run it in the SAME browser session before and after a change —
+	 * absolute numbers vary by machine, the ratio does not.
+	 */
+	window.__bench = function (steps) {
+		return new Promise(function (resolve) {
+			var root = document.querySelector(".dstv_root");
+			if (root === null) { resolve(null); return; }
+			root.focus();
+			var n = steps === void 0 ? 24 : steps;
+			var samples = [];
+			var i = 0;
+			var done = function () {
+				if (i >= n) {
+					samples.sort(function (a, b) { return a - b; });
+					resolve({ n: samples.length, median: samples[Math.floor(samples.length / 2)], p90: samples[Math.floor(samples.length * 0.9)], min: samples[0], max: samples[samples.length - 1] });
+					return;
+				}
+				i += 1;
+				var t0 = performance.now();
+				var before = document.querySelector("[role=option][aria-selected=true]");
+				document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+				// Poll the DOM instead of waiting on rAF: a backgrounded window throttles rAF
+				// to ~1 Hz and every sample would then measure the throttle, not the render.
+				var poll = function () {
+					var now = document.querySelector("[role=option][aria-selected=true]");
+					if (now !== before || performance.now() - t0 > 500) { samples.push(Math.round(performance.now() - t0)); done(); return; }
+					setTimeout(poll, 1);
+				};
+				setTimeout(poll, 1);
+			};
+			document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }));
+			requestAnimationFrame(function () { requestAnimationFrame(done); });
+		});
+	};
+
 	window.__remount = function (overrides) {
 		root.unmount();
 		root = ReactDOM.createRoot(seat);
