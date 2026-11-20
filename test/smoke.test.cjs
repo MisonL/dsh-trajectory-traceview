@@ -1895,6 +1895,95 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── EXPORTLEAK1: no "undefined / NaN / Infinity / [object Object]" in the output ──
+	// A hostile-snapshot sweep of the Markdown paths found four kinds of leak that the
+	// earlier fuzz never looked for, because it only asserted "does not throw":
+	//   ## 轮次 NaN            (turn interpolated with String())
+	//   ↻ 重试 (#1/Infinity)   (retry counters interpolated raw)
+	//   ♺ 压缩 _([object Object] …)
+	//   ### ⚡ /undefined      (command fallback name)
+	// plus two remaining Symbol crashes (`t${callId}` in cell ids, and `Number(Symbol)`).
+	// A viewer that prints "NaN" into the notes it exports is worse than one that shows
+	// nothing: the reader cannot tell a broken field from a real value.
+	{
+		let seedLeak = 20240101;
+		const rndLeak = () => { seedLeak = (seedLeak * 1103515245 + 12345) & 0x7fffffff; return seedLeak / 0x7fffffff; };
+		const pickLeak = (arr) => arr[Math.floor(rndLeak() * arr.length)];
+		const badLeak = () => pickLeak([null, void 0, 0, -1, NaN, Infinity, "", "x", true, Symbol("s"), 5n, {}, []]);
+		const kindsLeak = ["user", "assistant", "tool-result", "compaction", "turn-error", "model-retry", "turn-max-tokens", "command", "unknown", "context", "steering"];
+		let crashes = 0, firstCrash = null;
+		const leaked = new Set();
+		for (let round = 0; round < 120; round += 1) {
+			const nodes = Array.from({ length: 1 + Math.floor(rndLeak() * 6) }, (_, i) => ({
+				kind: pickLeak(kindsLeak),
+				seq: rndLeak() < 0.4 ? badLeak() : i + 1,
+				time: rndLeak() < 0.3 ? badLeak() : 1e12,
+				turn: rndLeak() < 0.3 ? badLeak() : 1,
+				step: rndLeak() < 0.3 ? badLeak() : 1,
+				messageId: rndLeak() < 0.5 ? "m" : badLeak(),
+				callId: rndLeak() < 0.5 ? "c" : badLeak(),
+				blocks: rndLeak() < 0.3 ? badLeak() : [{ kind: pickLeak(["text", "reasoning", "tool-call", "other", "bogus"]), text: rndLeak() < 0.3 ? badLeak() : "T", name: rndLeak() < 0.3 ? badLeak() : "n", argsRaw: rndLeak() < 0.3 ? badLeak() : "{}", callId: rndLeak() < 0.5 ? "c" : badLeak() }],
+				content: rndLeak() < 0.3 ? badLeak() : [{ type: "text", text: rndLeak() < 0.3 ? badLeak() : "C" }],
+				summary: rndLeak() < 0.4 ? badLeak() : "S", message: rndLeak() < 0.4 ? badLeak() : "M", type: rndLeak() < 0.4 ? badLeak() : "t",
+				data: rndLeak() < 0.4 ? badLeak() : { k: 1 }, name: rndLeak() < 0.4 ? badLeak() : "nm", args: rndLeak() < 0.4 ? badLeak() : "a",
+				outcomeText: rndLeak() < 0.4 ? badLeak() : "o", failure: rndLeak() < 0.4 ? badLeak() : { message: "f", code: "c" },
+				retry: rndLeak() < 0.3 ? badLeak() : 1, maxRetries: rndLeak() < 0.3 ? badLeak() : 3,
+				commandId: rndLeak() < 0.5 ? "cmd" : badLeak(),
+				count: rndLeak() < 0.4 ? badLeak() : 4, tokens: rndLeak() < 0.4 ? badLeak() : 5,
+				shadowedItemCount: rndLeak() < 0.4 ? badLeak() : 3, shadowedTokenCount: rndLeak() < 0.4 ? badLeak() : 9
+			}));
+			try {
+				const trLeak = deriveTraceTree({
+					eventNodes: nodes,
+					requests: rndLeak() < 0.3 ? [null] : [{ purpose: pickLeak(["assistant", "compaction", "x"]), turn: rndLeak() < 0.3 ? badLeak() : 1, step: 1, startSeq: rndLeak() < 0.3 ? badLeak() : 1, requestConfig: { model: rndLeak() < 0.3 ? badLeak() : "m" }, usage: rndLeak() < 0.3 ? badLeak() : { input: 1, output: 2 }, prompt: { system: "s", tools: [] } }],
+					callSchemas: new Map(), runningCalls: [], partial: null
+				}, t);
+				const mdLeak = buildTraceMarkdown(trLeak, t);
+				for (const needle of ["undefined", "NaN", "[object Object]", "Infinity"]) {
+					if (mdLeak.indexOf(needle) >= 0) leaked.add(needle);
+				}
+				for (const stLeak of trLeak.stations) buildStepMarkdown(stLeak, [], false, t);
+			} catch (e) {
+				crashes += 1;
+				if (firstCrash === null) firstCrash = e.constructor.name + ": " + String(e.message).slice(0, 70);
+			}
+		}
+		// Deterministic cases, because a random pool is a weak probe for one specific field:
+		// the Symbol `callId` never showed up often enough for the loop above to catch a
+		// regression in `cellId` (measured: the mutation stayed green).
+		{
+			const foldOne = (node) => deriveTraceTree({
+				eventNodes: [Object.assign({ seq: 1, time: 1e12, turn: 1 }, node)],
+				requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+			}, t);
+			const symOne = Symbol("c1");
+			const cases = [
+				["a Symbol tool-call id", { kind: "assistant", step: 1, messageId: "m", blocks: [{ kind: "tool-call", callId: symOne, name: "n", argsRaw: "{}" }, { kind: "tool-call", callId: Symbol("c1"), name: "n2", argsRaw: "{}" }] }],
+				["a Symbol running call id", { kind: "assistant", step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }],
+				["a NaN turn", { kind: "turn-error", turn: NaN, message: "m" }],
+				["an Infinity retry count", { kind: "model-retry", retry: 1, maxRetries: Infinity, failure: { message: "f" } }]
+			];
+			for (const [label, node] of cases) {
+				try {
+					foldOne(node);
+				} catch (e) {
+					throw new Error("EXPORTLEAK1 a " + label + " crashed the projection: " + String(e.message).slice(0, 60));
+				}
+			}
+			// Two distinct Symbols whose descriptions collide must still get distinct cell ids,
+			// because the id is a React key.
+			const idsTwo = foldOne(cases[0][1]).stations.flatMap((x) => (x.cells ?? []).map((c) => c.id));
+			if (new Set(idsTwo).size !== idsTwo.length) {
+				throw new Error("EXPORTLEAK1 Symbol call ids produced duplicate cell ids: " + idsTwo.join(","));
+			}
+			// And a non-finite turn must not print as a number.
+			const mdTurn = buildTraceMarkdown(foldOne({ kind: "turn-error", turn: NaN, message: "m" }), t);
+			if (mdTurn.indexOf("NaN") >= 0) throw new Error("EXPORTLEAK1 a NaN turn still renders as NaN");
+		}
+		if (crashes > 0) throw new Error("EXPORTLEAK1 " + crashes + "/120 hostile snapshots threw, first: " + firstCrash);
+		if (leaked.size > 0) throw new Error("EXPORTLEAK1 leaked literal token(s) into the export: " + [...leaked].join(", "));
+	}
+
 	// ── RECORDER1: the message rebuild must not depend on caller-side sorting ───
 	// `reconstructMessages` walked `nodes` and `break`ed at the first seq past the step.
 	// That silently required ascending order. The only caller passes the sorted

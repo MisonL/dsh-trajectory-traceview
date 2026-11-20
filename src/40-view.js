@@ -1691,7 +1691,7 @@
 						jsx("span", { className: "dstv_dLabel", children: s.label }, "cLbl"),
 						jsx("div", { className: "dstv_dText", children: s.summary || "…" }, "cTxt"),
 						s.count != null || s.tokens != null ? jsx("div", { className: "dstv_cfgChips", children: [
-							s.count != null ? jsx("span", { className: "dstv_cfgChip", children: [`${s.count} ${t("meta.steps")}`] }, "cCnt") : null,
+							Number.isSafeInteger(s.count) ? jsx("span", { className: "dstv_cfgChip", children: [`${numOr(s.count)} ${t("meta.steps")}`] }, "cCnt") : null,
 							s.tokens != null ? jsx("span", { className: "dstv_cfgChip", children: [`${fmtTokens(s.tokens)} ${t("meta.tokens")}`] }, "cTok") : null
 						] }, "cChips") : null
 					] });
@@ -1814,7 +1814,7 @@
 						Array.isArray(cfg.stop) && cfg.stop.length > 0 ? jsx("span", { className: "dstv_cfgChip", children: ["stop ×", jsx("b", { children: String(cfg.stop.length) }, "v")] }, "cStop") : null,
 						req.status ? jsx("span", { className: `dstv_chip ${req.status === "running" ? "run" : req.status === "error" ? "err" : ""}`, children: req.status }, "cStatus") : null,
 						req.durationMs != null ? jsx("span", { className: "dstv_cfgChip", children: [fmtMs(req.durationMs)] }, "cDur") : null,
-						req.retry != null ? jsx("span", { className: "dstv_chip retry", children: [`↻ ${t("status.retry")} #${req.retry}${req.maxRetries != null ? `/${req.maxRetries}` : ""}`] }, "cRetry") : null
+						req.retry != null ? jsx("span", { className: "dstv_chip retry", children: [`↻ ${t("status.retry")} #${numOr(req.retry)}${Number.isSafeInteger(req.maxRetries) ? `/${numOr(req.maxRetries)}` : ""}`] }, "cRetry") : null
 					] }, "reqCfg"),
 					req.error != null ? jsx("div", { className: "dstv_dTool", style: { borderColor: "color-mix(in srgb,var(--dstv-err) 50%,transparent)" }, children: [
 						jsx("span", { className: "dstv_dLabel err", children: `✗ ${req.error}` }, "reqErr")

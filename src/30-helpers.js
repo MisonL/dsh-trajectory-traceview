@@ -48,7 +48,10 @@
 		function asText(value) {
 			if (typeof value === "string") return value;
 			if (value === null || value === void 0) return "";
-			if (typeof value === "number" || typeof value === "boolean") return String(value);
+			// A non-finite number is not a value the log provided; `String(NaN)` would put
+			// the literal token "NaN" into the panel and the export.
+			if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+			if (typeof value === "boolean") return String(value);
 			try { return safeJsonPreview(value, 2000); } catch (e) { return ""; }
 		}
 		/**
@@ -350,6 +353,16 @@
 		 * @param limit - maximum characters to keep.
 		 * @returns a printable string, never throwing.
 		 */
+		/**
+		 * Render a log-supplied integer for display.
+		 *
+		 * `String(n.turn)` on a NaN/Infinity/object field printed "轮次 NaN" and
+		 * "[object Object]" straight into the panel and the export. A number the log does
+		 * not actually provide must read as unknown, not as a bogus value.
+		 */
+		function numOr(v, fallback) {
+			return Number.isSafeInteger(v) ? String(v) : (fallback === void 0 ? "?" : fallback);
+		}
 		/** A readable stand-in for a value JSON refuses to serialise. */
 		function describeUnrepresentable(value) {
 			if (value === void 0) return "";
@@ -975,6 +988,15 @@
 			// scope produces distinct React keys too.
 			const attachedCallIds = new Set();
 			const callKey = (turn, callId) => `${String(turn)}:${String(callId)}`;
+			/**
+			 * Cell ids double as React keys, and `callId` comes straight from the log. A
+			 * template literal calls ToString, which THROWS on a Symbol — one damaged
+			 * tool-call id took the entire projection down (`Cannot convert a Symbol value
+			 * to a string`). String ids are kept VERBATIM because anchors are built from
+			 * them (tvp1:c<callId>); anything else gets an ordinal that is unique within the
+			 * station, which is all a React key needs.
+			 */
+			const cellId = (prefix, callId, ordinal) => `${prefix}${typeof callId === "string" ? callId : `?${String(ordinal)}`}`;
 			/** Next unclaimed result for this call id, or undefined when none is left. */
 			const takeResult = (callId) => {
 				const list = resultsById.get(callId);
@@ -1140,7 +1162,7 @@
 							st.toolCount += 1;
 							if (res?.isError === true) st.hasError = true;
 							st.cells.push({
-								id: `t${b.callId}`,
+								id: cellId("t", b.callId, st.cells.length),
 								kind: "tool",
 								callId: b.callId,
 								name: typeof b.name === "string" && b.name !== "" ? b.name : t("node.tool"),
@@ -1221,7 +1243,7 @@
 				st.toolCount += 1;
 				const schema = schemasById.get(c.callId);
 				st.cells.push({
-					id: `t${c.callId}`, kind: "tool", callId: c.callId,
+					id: cellId("t", c.callId, st.cells.length), kind: "tool", callId: c.callId,
 					name: typeof c.name === "string" && c.name !== "" ? c.name : t("node.tool"),
 					args: typeof c.argsRaw === "string" ? c.argsRaw : "",
 					resultText: "", isError: false, errorName: void 0, durationMs: null,
@@ -1295,7 +1317,7 @@
 						if (res?.isError === true) st.hasError = true;
 						const schema = schemasById.get(b.callId);
 						st.cells.push({
-							id: `t${b.callId}`, kind: "tool", callId: b.callId,
+							id: cellId("t", b.callId, st.cells.length), kind: "tool", callId: b.callId,
 							name: typeof b.name === "string" && b.name !== "" ? b.name : t("node.tool"),
 							args: typeof b.argsRaw === "string" ? b.argsRaw : "",
 							resultText: res !== undefined ? blocksText(res.content, t) : "",
@@ -1404,7 +1426,7 @@
 					const e = turnForSeq(n.seq);
 					e.stations.push({
 						id: `c${n.seq}`, kind: "command", time: n.time, seq: n.seq,
-						name: asText(n.name) !== "" ? asText(n.name) : `/${n.commandId}`, args: asText(n.args),
+						name: asText(n.name) !== "" ? asText(n.name) : `/${asText(n.commandId) || "?"}`, args: asText(n.args),
 						outcomeKind: n.outcome?.kind ?? null, outcomeText: asText(n.outcome?.text),
 						label: t("node.command")
 					});
@@ -1616,7 +1638,7 @@
 							// Per-turn number: a window-wide counter renumbers every step
 							// whenever older history is prepended.
 							label: `${t("node.step")} ${piece.stepNum}`,
-							detail: `${t("node.turn")} ${String(e.turn)} · ${t("node.step")} ${piece.stepNum}`,
+							detail: `${t("node.turn")} ${numOr(e.turn)} · ${t("node.step")} ${numOr(piece.stepNum)}`,
 							meta,
 							cells: st.cells,
 							live: st.live === true,
@@ -1647,7 +1669,7 @@
 					let meta = [];
 					if (d.kind === "compaction") {
 						meta.push(t("chip.compacted"));
-						if (d.count != null) meta.push(`${d.count}${t("meta.steps")}`);
+						if (Number.isSafeInteger(d.count)) meta.push(`${numOr(d.count)}${t("meta.steps")}`);
 						if (d.tokens != null) meta.push(`${fmtTokens(d.tokens)}${t("meta.tokens")}`);
 					} else if (d.kind === "error") {
 						meta.push(t("meta.error"));
@@ -1677,7 +1699,7 @@
 				const m = [];
 				if (stepNums.length > 0) m.push(`${stepNums.length}${t("meta.steps")}`);
 				if (toolCount > 0) m.push(`${toolCount}${t("meta.tools")}`);
-				return { id: `t${e.turn}`, kind: "turn", label: e.turn === 0 ? t("node.systemTurn") : `${t("node.turn")} ${String(e.turn)}`, meta: m, children };
+				return { id: `t${e.turn}`, kind: "turn", label: e.turn === 0 ? t("node.systemTurn") : `${t("node.turn")} ${numOr(e.turn)}`, meta: m, children };
 			});
 			// Attach the turn tag to the first station of each turn.
 			{
@@ -1945,7 +1967,7 @@
 				extras.push(`**${t("node.error")}**${station.code != null ? ` \`${station.code}\`` : ""}`);
 				if (station.message) { extras.push(""); extras.push(...fencedBlock(station.message)); }
 			} else if (station.kind === "retry") {
-				extras.push(`**${t("node.retry")}** · ${station.retry ?? "?"}/${station.maxRetries ?? "?"}${station.provider ? ` · ${station.provider}` : ""}${station.retryState ? ` · ${station.retryState}` : ""}`);
+				extras.push(`**${t("node.retry")}** · ${numOr(station.retry)}/${numOr(station.maxRetries)}${station.provider ? ` · ${station.provider}` : ""}${station.retryState ? ` · ${station.retryState}` : ""}`);
 				if (station.message) { extras.push(""); extras.push(...fencedBlock(station.message)); }
 				if (station.code != null) extras.push(`> \`${station.code}\``);
 			} else if (station.kind === "maxTokens") {
@@ -2301,7 +2323,7 @@
 					if (st.args !== "") { L.push(""); L.push(...fencedBlock(prettyArgs(st.args) || st.args, "json")); }
 					if (st.displayText !== "") { L.push(""); L.push(...fencedBlock(st.displayText.length > 4000 ? `${st.displayText.slice(0, 4000)}\n…(${fmtInt(st.displayText.length)} ${t("detail.chars")})` : st.displayText)); }
 				} else if (st.kind === "compaction") {
-					L.push(`### ♺ ${st.label}${st.count != null ? ` _(${st.count} ${t("meta.steps")} / ${fmtTokens(st.tokens)} ${t("meta.tokens")})_` : ""}`);
+					L.push(`### ♺ ${st.label}${Number.isSafeInteger(st.count) ? ` _(${numOr(st.count)} ${t("meta.steps")} / ${fmtTokens(st.tokens)} ${t("meta.tokens")})_` : ""}`);
 					if (st.summary !== "") { L.push(""); L.push(st.summary); }
 					if (st.crequest?.outputText) { L.push(""); L.push(`<details><summary>${t("detail.compactionOutput")}</summary>`); L.push(""); L.push(st.crequest.outputText); L.push("</details>"); }
 				} else if (st.kind === "error") {
@@ -2314,7 +2336,7 @@
 					// "which retry failed, and with what code" is exactly what a reader
 					// pastes into a bug report.
 					const retryBits = [];
-					if (Number.isFinite(st.retry)) retryBits.push(`#${st.retry}${st.maxRetries != null ? `/${st.maxRetries}` : ""}`);
+					if (Number.isFinite(st.retry)) retryBits.push(`#${numOr(st.retry)}${Number.isSafeInteger(st.maxRetries) ? `/${numOr(st.maxRetries)}` : ""}`);
 					if (st.provider) retryBits.push(String(st.provider));
 					if (st.code != null) retryBits.push(`code: ${st.code}`);
 					if (st.retryState) retryBits.push(String(st.retryState));

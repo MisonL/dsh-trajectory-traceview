@@ -38,7 +38,7 @@
 
 ## 二、`lib/client.js` 函数级
 
-上游 24 个函数：**9 个原样保留、15 个被修改、0 个被删除**；本仓**新增 42 个**。
+上游 24 个函数：**9 个原样保留、15 个被修改、0 个被删除**；本仓**新增 43 个**。
 
 ### 原样保留（9）
 
@@ -74,7 +74,7 @@
 - `subDetailOf`
 - `textOfContent`
 
-### 本仓新增（42）
+### 本仓新增（43）
 
 上游完全没有：
 
@@ -101,6 +101,7 @@
 - `mdBlocks`
 - `mdInline`
 - `nextHashFor`
+- `numOr`
 - `parseAnchor`
 - `promptTextDiff`
 - `proseSafe`
