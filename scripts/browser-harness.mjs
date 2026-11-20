@@ -16,13 +16,23 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 
-/** CJS sources, keyed by the id our loader will resolve. */
+/**
+ * CJS sources, keyed by the id our loader will resolve.
+ *
+ * `--prod` swaps in the PRODUCTION React builds. This matters more than it looks: the
+ * development build adds prop validation and dev-only bookkeeping to every render, so a
+ * component optimisation measured here can look like a big win and then lose in the real
+ * host (DESIGN §13.07 — that mistake cost two shipped-then-reverted commits). Behaviour
+ * gates should use the default dev build (it surfaces warnings); a PERFORMANCE number is
+ * only worth anything with `--prod`, which is what the host actually ships.
+ */
+const PROD = process.argv.includes("--prod");
 const MODULES = {
-	react: "node_modules/react/cjs/react.development.js",
-	"react/jsx-runtime": "node_modules/react/cjs/react-jsx-runtime.development.js",
-	"react-dom": "node_modules/react-dom/cjs/react-dom.development.js",
-	"react-dom/client": "node_modules/react-dom/cjs/react-dom-client.development.js",
-	scheduler: "node_modules/scheduler/cjs/scheduler.development.js"
+	react: `node_modules/react/cjs/react.${PROD ? "production" : "development"}.js`,
+	"react/jsx-runtime": `node_modules/react/cjs/react-jsx-runtime.${PROD ? "production" : "development"}.js`,
+	"react-dom": `node_modules/react-dom/cjs/react-dom.${PROD ? "production" : "development"}.js`,
+	"react-dom/client": `node_modules/react-dom/cjs/react-dom-client.${PROD ? "production" : "development"}.js`,
+	scheduler: `node_modules/scheduler/cjs/scheduler.${PROD ? "production" : "development"}.js`
 };
 
 /**
@@ -99,7 +109,7 @@ const html = `<!doctype html>
 
 <script>
 /* ---- minimal CommonJS loader: React 19 has no UMD build ---- */
-var process = { env: { NODE_ENV: "development" } };
+var process = { env: { NODE_ENV: "%%NODE_ENV%%" } };
 (function () {
 	var defs = Object.create(null), cache = Object.create(null);
 	window.__define = function (id, fn) { defs[id] = fn; };
@@ -127,6 +137,10 @@ ${fixture}
 `;
 
 const out = path.join(root, "test/browser/harness.html");
-fs.writeFileSync(out, html);
+// The template is a plain string; substitute the build mode once here so `--prod` cannot
+// silently leave `process.env.NODE_ENV` at "development" (which makes React print the
+// dev-only warnings and pick extra code paths even with the production bundle loaded).
+fs.writeFileSync(out, html.split("%%NODE_ENV%%").join(PROD ? "production" : "development"));
 console.log("browser-harness: wrote " + path.relative(root, out) + " (" + (html.length / 1024).toFixed(0) + " KB, host theme " +
-	(hostThemeCss === null ? "FALLBACK light only" : "loaded from the installed DSH") + ")");
+	(hostThemeCss === null ? "FALLBACK light only" : "loaded from the installed DSH") +
+	", React " + (PROD ? "production — usable for timing" : "development — behaviour only") + ")");
