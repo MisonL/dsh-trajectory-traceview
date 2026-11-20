@@ -4830,3 +4830,66 @@ for (const n of rawNodes) {
 
 - 仍未跑真实浏览器。
 - 归一化后所有恶意 seq 都变成 `null`，多个这样的节点靠 `-2`、`-3` 后缀区分。id 唯一性断言过了，但**排序稳定性**（`null` 之间的相对顺序）依赖 `sort` 的实现细节，未单独验证。
+
+### 12.85 第十七轮补：`step` 也崩、fuzz 池太温和（2026-11-20）
+
+#### `step` 是同一个坑
+
+修完 `seq` 我接着测了同类字段，`step` 也一样：
+
+```
+step = Symbol  →  TypeError: Cannot convert a Symbol value to a number
+step = BigInt 3n  →  ✓（能过）
+```
+
+`src/30-helpers.js` 里有三处直接 `Number(x.step)`（assistant 消息、tool-result、partial 三条路径）。抽出 `stepOf()`：Symbol 归一为 NaN，其余走 `Number`，再 `Math.trunc` 并夹到 `>= 1`，与原语义（`|| 1`）一致但对所有输入全域。
+
+| step 输入 | turnStep |
+|---|---|
+| `Symbol` | 1 |
+| `3n` | 3 |
+| `2.7` | 2 |
+| `-5` / `0` / `NaN` / `{}` | 1 |
+| `"7"` | 7 |
+
+#### fuzz 池太温和，抓不到自己该抓的 bug
+
+第六轮那套 600 轮 fuzz 只喂 JSON 可表示的值——`JSON.stringify` 会直接丢掉 Symbol 和 BigInt，所以那两种类型**从来没进过池子**，而两个真崩溃恰好都藏在那里。
+
+把不可序列化类型加进去重跑 1000 轮，0 失败。看起来很好。但做变异测试时：
+
+```
+变异 step → HOSTILEFIELDS1 0/300 通过   ← 探针没反应
+```
+
+原因是通用池里有 22 种值，Symbol 落进 `step` 的概率约 1/700 节点，300 轮 × 平均 4.5 个节点根本不够。
+
+三条修正：
+
+1. **数值字段单独一个池**（`seq`/`time`/`turn`/`step`/`callTime`），Symbol 与 BigInt 权重拉到 0.45；
+2. **每轮强制 `list[0].kind = "assistant"`**，保证读 `step` 的那条分支一定跑到；
+3. 其余字段保持通用池。
+
+重测：
+
+| 变异 | 结果 |
+|---|---|
+| `step` 改回 `Number` 直转 | HOSTILEFIELDS1 **19/300** 红 |
+| 去掉 `seq` 归一化 | HOSTILEFIELDS1 **80/300** 红（BigInt 混算） |
+
+#### 同上一次的同一个教训
+
+**变异不红，不是防线在，是探针不够狠。**
+
+这已经是第三次：
+
+1. `TOOLLIST1` 的**变异本身无效**（`raw === null` 仍放过 `undefined`）；
+2. `SEQCOERCE1` 用 `[1,2,3]` 排序，**字典序和数值序结果相同**；
+3. `HOSTILEFIELDS1` 池子太温和，**恶意值落不到目标字段**。
+
+三次都表现成"变异没红"，三次的原因都是我写的东西不够狠。所以流程该改成：**变异不红时，先假设探针有问题，再假设防线有问题。**
+
+#### 仍未验证
+
+- `step` 修了 `assistant` / `tool-result` / `partial` 三处，其他读 `step` 的地方（若有）未逐一排查。
+- 仍未跑真实浏览器。
