@@ -6386,3 +6386,27 @@ Error: live running count: 2
 #### 关于"收敛"这件事本身
 
 四轮 Codex 复核，每轮都找到了真问题（4 条 → 2 条 → 1 条 → 0 条）。这个递减序列本身比"一次通过"更有说服力——它说明前几轮的"绿"不是因为没有缺陷，而是因为没人从新角度去看。
+
+###13.25新一轮独立猎取：又找到4条静默丢失（2026-11-21）
+
+用户问"还有其他问题吗"，我没回答"没有"，而是重新写了一组探针，针对**此前没测过**的输入形态。找到4条真缺陷 +2条待决策。
+
+####已修4条
+
+| # |问题 |复现 |变异后守卫 |
+|---|---|---|---|
+| A | **同一 station内两个同 callId的 tool-call块 → cell id重复**（React重复 key） | `{"ids":["tdup","tdup"],"unique":false}` | `HUNT2 duplicate cell ids: ["tdup","tdup"]` |
+| C | runningCall的 `turn`是数字字符串 `"1"` → **整个在飞调用消失** | `[]` | `HUNT2 a string turn dropped the running call: []` |
+| E | `argsRaw`是已解析的对象 →参数渲染成**空**，看起来像"没传参" | `{"args":"","ok":true}` →现在 `{"a":1}` | `HUNT2 non-string argsRaw rendered as empty: ""` |
+| F |未知 `block.kind` → **整个块静默消失**，未来的新块类型会显示成"模型什么都没说" | `[]` →现在 `[{"text":"block.unknown · weird"}]` | `HUNT2 an unknown block kind vanished: []` |
+
+**A是最严重的一条**：`cellId`对字符串 callId **完全忽略 ordinal**。§13.09曾把"两个同 callId的 cell共享 React key"记为残留意项，但那时以为它不可达——§13.09的②修复让 durable路径无条件 claim之后，它变成可达了。所以这是**我自己上游修复带来的暴露**，不是新 bug。
+
+####待决策2条（没动）
+
+- **B**：`reconstructMessages`遇到 `seq === null`的节点，会**越过 `beforeSeq`窗口头**（§13.12已记录）。`seq`为 null时位置未知，"放进这个请求的窗口"和"排除"都是猜测。需要定语义：宁可少显示，还是宁可显示可能属于未来的内容？
+- **D（S1）**：子调用失败**不**提升 step的错误状态。顶层成功、子调用失败的 step在时间线/KPI上仍显示成功。这是**产品定义问题**——KPI的"错误"是否包含嵌套调用。Codex也把它列为疑似而非缺陷。
+
+####过程失误
+
+本轮我连续5次把 `> file2>&1`写成 `> file2>&1`，导致读错文件名、多次重跑。纯手误，但浪费了时间；教训是 shell重定向不要靠肌肉记忆。

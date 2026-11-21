@@ -4594,6 +4594,57 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── HUNT2: four silent-loss shapes found by a fresh hunt ─────────────────
+	{
+		const foldH2 = (o) => deriveTraceTree(Object.assign({ eventNodes: [], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, o), t);
+
+		// (a) Two DISTINCT tool-call blocks may share a callId in one message. Cell ids are
+		// React keys, and the helper dropped the ordinal for string ids — `tdup` appeared
+		// twice and React warned about duplicate keys.
+		{
+			const trA = foldH2({ eventNodes: [{ kind: "assistant", seq:1, time:1e12, turn:1, step:1, messageId: "m", blocks: [
+				{ kind: "tool-call", callId: "dup", name: "alpha", argsRaw: "{}" },
+				{ kind: "tool-call", callId: "dup", name: "beta", argsRaw: "{}" }
+			] }] });
+			const cells = trA.stations.find((x) => x.kind === "step").cells.filter((c) => c.kind === "tool");
+			const ids = cells.map((c) => c.id);
+			if (cells.length !==2) throw new Error("HUNT2 same-callId blocks collapsed: " + cells.length);
+			if (new Set(ids).size !== ids.length) throw new Error("HUNT2 duplicate cell ids: " + JSON.stringify(ids));
+		}
+
+		// (b) A numeric STRING turn on a running call used to fail `typeof === "number"` and
+		// the whole in-flight call disappeared with no station and no warning.
+		{
+			const trB = foldH2({ eventNodes: [{ kind: "assistant", seq:1, time:1e12, turn:1, step:1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }],
+				runningCalls: [{ callId: "c1", turn: "1", step:1, name: "stringTurn", argsRaw: "{}", time:1e12 }] });
+			const names = trB.stations.filter((x) => x.kind === "step").flatMap((x) => x.cells ?? []).filter((c) => c.kind === "tool").map((c) => c.name);
+			if (names.join(",") !== "stringTurn") throw new Error("HUNT2 a string turn dropped the running call: " + JSON.stringify(names));
+		}
+
+		// (c) `argsRaw` carrying an already-parsed object used to render as EMPTY args, which
+		// reads as "the tool was called with no arguments".
+		{
+			const trC = foldH2({ eventNodes: [{ kind: "assistant", seq:1, time:1e12, turn:1, step:1, messageId: "m", blocks: [
+				{ kind: "tool-call", callId: "c", name: "n", argsRaw: { a:1 } }
+			] }] });
+			const cell = trC.stations.find((x) => x.kind === "step").cells.find((c) => c.kind === "tool");
+			if (typeof cell.args !== "string" || cell.args.indexOf("a") <0) {
+				throw new Error("HUNT2 non-string argsRaw rendered as empty: " + JSON.stringify(cell.args));
+			}
+		}
+
+		// (d) A block kind this build does not know must be NAMED, not dropped. That is how
+		// `image`/`other` arrived in the contract; silently skipping it makes a future reply
+		// look like the model produced nothing.
+		{
+			const trD = foldH2({ eventNodes: [{ kind: "assistant", seq:1, time:1e12, turn:1, step:1, messageId: "m", blocks: [{ kind: "weird", text: "x" }] }] });
+			const cells = trD.stations.find((x) => x.kind === "step").cells;
+			if (cells.length !==1 || String(cells[0].text).indexOf("weird") <0) {
+				throw new Error("HUNT2 an unknown block kind vanished: " + JSON.stringify(cells));
+			}
+		}
+	}
+
 	// ── HOSTILE2: three malformed-host shapes must not take the panel down ──
 	// All three were reproduced against the real DSH 0.2.2-rc.2 record shapes and each
 	// one threw BEFORE any station existed, so the render boundary could not catch it.

@@ -378,6 +378,21 @@
 		 * card must not interpolate it raw. BigInt/numbers are shown as their digits; truly
 		 * unprintable values fall back to `describeUnrepresentable`.
 		 */
+		/**
+		 * Tool arguments as text.
+		 *
+		 * The contract types `argsRaw` as a string, but a merged/hand-edited log can carry the
+		 * already-parsed object. `typeof === "string"` then silently produced an EMPTY args
+		 * field — the card looked like the tool was called with no arguments. Render whatever
+		 * was recorded instead.
+		 */
+		function argsText(argsRaw) {
+			if (typeof argsRaw === "string") return argsRaw;
+			if (argsRaw == null) return "";
+			const preview = safeJsonPreview(argsRaw,2000);
+			return preview;
+		}
+
 		function displayCallId(callId) {
 			if (typeof callId === "string") return callId;
 			if (typeof callId === "number" || typeof callId === "bigint" || typeof callId === "boolean") return String(callId);
@@ -1054,7 +1069,12 @@
 			 * them (tvp1:c<callId>); anything else gets an ordinal that is unique within the
 			 * station, which is all a React key needs.
 			 */
-			const cellId = (prefix, callId, ordinal) => `${prefix}${typeof callId === "string" ? callId : `?${String(ordinal)}`}`;
+			// Cells double as React keys inside a step. Two DISTINCT tool-call blocks in one
+			// message may legitimately share a callId (a merged/retried log), and with the
+			// old helper the ordinal was dropped for string ids — so `tdup` appeared twice and
+			// React warned about duplicate keys (measured: `["tdup","tdup"]`). Suffix the
+			// ordinal unconditionally; it is what keeps same-id siblings apart.
+			const cellId = (prefix, callId, ordinal) => `${prefix}${typeof callId === "string" ? callId : `?${String(ordinal)}`}#${String(ordinal)}`;
 			/** Next unclaimed result for this call id, or undefined when none is left. */
 			const takeResult = (callId) => {
 				const list = resultsById.get(callId);
@@ -1231,6 +1251,12 @@
 							const label = b.kind === "image" ? t("block.image")
 								: `${t("block.other")}${typeof b.block === "object" && b.block !== null && typeof b.block.type === "string" ? ` · ${b.block.type}` : ""}`;
 							st.cells.push({ id: `o${n.seq}${st.cells.length}`, kind: "assistant", text: label, thinking: "" });
+						} else if (b.kind !== "text" && b.kind !== "reasoning" && b.kind !== "tool-call") {
+							// A kind this build does not know (the host adding one is exactly how
+							// `image`/`other` arrived). These used to fall through the chain and
+							// vanish, so a future block type would render as "the model said
+							// nothing". Name it instead of guessing at its content.
+							st.cells.push({ id: `u${n.seq}${st.cells.length}`, kind: "assistant", text: `${t("block.unknown")} · ${String(b.kind)}`, thinking: "" });
 						} else if (b.kind === "tool-call") {
 							// every durable block is a real call, even with a repeated id
 							claimCall(turn, b.callId);
@@ -1255,7 +1281,7 @@
 								kind: "tool",
 								callId: b.callId,
 								name: typeof b.name === "string" && b.name !== "" ? b.name : t("node.tool"),
-								args: typeof b.argsRaw === "string" ? b.argsRaw : "",
+								args: argsText(b.argsRaw),
 								resultText: res !== undefined ? blocksText(res.content, t) : "",
 								isError: res?.isError === true,
 								errorName: res?.error?.name,
@@ -1314,12 +1340,17 @@
 
 			// In-flight tool calls not already attached via an assistant block.
 			for (const c of safeList(snap?.runningCalls)) {
-				if (typeof c.turn !== "number" || claimedCall(c.turn, c.callId)) continue;
+				// A numeric STRING turn ("1") used to fail `typeof === "number"` and the whole
+				// in-flight call vanished, with no station and no warning. `seqOf` already
+				// normalises the same hostile shapes for nodes; use it here too. A genuinely
+				// unusable turn still falls back to 0 rather than disappearing.
+				const cTurn = seqOf(c.turn) ?? 0;
+				if (claimedCall(cTurn, c.callId)) continue;
 				// Claim the call id here as well: the streaming partial can describe the very
 				// same in-flight call, and without claiming it the tool is counted twice
 				// (once from runningCalls, once from the partial block).
-				claimCall(c.turn, c.callId);
-				const e = ensureTurn(c.turn, c.time);
+				claimCall(cTurn, c.callId);
+				const e = ensureTurn(cTurn, c.time);
 				const step = stepOf(c.step);
 				if (e.steps === void 0) e.steps = new Map();
 				let st = e.steps.get(step);
@@ -1334,7 +1365,7 @@
 				st.cells.push({
 					id: cellId("t", c.callId, st.cells.length), kind: "tool", callId: c.callId,
 					name: typeof c.name === "string" && c.name !== "" ? c.name : t("node.tool"),
-					args: typeof c.argsRaw === "string" ? c.argsRaw : "",
+					args: argsText(c.argsRaw),
 					resultText: "", isError: false, errorName: void 0, durationMs: null,
 					running: true,
 					subCalls: mapSubCalls(c.subCalls, t),
@@ -1418,7 +1449,7 @@
 						st.cells.push({
 							id: cellId("t", b.callId, st.cells.length), kind: "tool", callId: b.callId,
 							name: typeof b.name === "string" && b.name !== "" ? b.name : t("node.tool"),
-							args: typeof b.argsRaw === "string" ? b.argsRaw : "",
+							args: argsText(b.argsRaw),
 							resultText: res !== undefined ? blocksText(res.content, t) : "",
 							isError: res?.isError === true,
 							errorName: res?.error?.name,
