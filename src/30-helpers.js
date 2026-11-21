@@ -1111,7 +1111,17 @@
 				// existed. Sort only on finite numbers; anything else keeps its relative order
 				// at the end instead of entering the comparator arithmetic.
 				const seqOrder = (v) => (typeof v === "bigint" ? Number(v) : v);
-				const reqs = safeList(snap?.requests).sort((a, b) => {
+				// `safeList` DROPS non-object rows (as it must: every other caller needs objects),
+				// and the request list then simply omitted them. Nodes report their unusable rows
+				// through `nodeStats.invalid`; requests now count theirs too, so a log carrying a
+				// null/stranded row is described instead of quietly shortened.
+				const rawReqs = Array.isArray(snap?.requests) ? snap.requests : [];
+				const reqs = [];
+				for (const raw of rawReqs) {
+					if (raw == null || typeof raw !== "object") { unplaceableRequests +=1; continue; }
+					reqs.push(raw);
+				}
+				reqs.sort((a, b) => {
 					const x = seqOrder(a?.startSeq);
 					const y = seqOrder(b?.startSeq);
 					const xf = Number.isFinite(x);
@@ -1123,6 +1133,11 @@
 				});
 				let lastPrompt = null;
 				for (const r of reqs) {
+					// A non-object row (null, a bare string) cannot be shown OR counted, and
+					// `safeList` only guarantees the container is an array. Nodes already report
+					// their unusable rows through `nodeStats.invalid`; requests must not vanish
+					// just because the row is not shaped like a request.
+					if (r == null || typeof r !== "object") { unplaceableRequests +=1; continue; }
 					if (r?.purpose === "compaction") { compactionReqs.push(r); continue; }
 					// A request we cannot even key (no `turn`, or a purpose this build does
 					// not know) used to be dropped on the floor. The view promises that what
@@ -1132,7 +1147,13 @@
 					if (r?.purpose !== "assistant" || typeof r.turn !== "number") { unplaceableRequests += 1; continue; }
 					const prompt = r.prompt ?? lastPrompt;
 					if (r.prompt != null) lastPrompt = r.prompt;
-					const rk = `${r.turn}:${r.step}`;
+					// A request whose `step` is not a usable number cannot be keyed:
+					// `${turn}:${step}` threw "Cannot convert a Symbol value to a string"
+					// on a hostile record and took the whole projection down. Count it as
+					// unplaceable instead — the same honest notice the other unkeyable rows get.
+					const stepNo = seqOf(r.step);
+					if (stepNo === null) { unplaceableRequests +=1; continue; }
+					const rk = `${String(r.turn)}:${String(stepNo)}`;
 					const bucket = requestsByStep.get(rk);
 					const entry = { req: r, prompt };
 					if (bucket === void 0) requestsByStep.set(rk, [entry]);
@@ -1439,6 +1460,12 @@
 						const plabel = b.kind === "image" ? t("block.image")
 							: `${t("block.other")}${typeof b.block === "object" && b.block !== null && typeof b.block.type === "string" ? ` · ${b.block.type}` : ""}`;
 						st.cells.push({ id: `po${st.cells.length}`, kind: "assistant", text: plabel, thinking: "" });
+					} else if (b.kind !== "text" && b.kind !== "reasoning") {
+						// Same forward-compat rule as the durable loop: a kind this build does not
+						// know must be NAMED, not dropped. The streaming branch was missed when the
+						// durable one got the placeholder, so a live `file`/future block showed an
+						// empty step (measured: cells [] for {kind:"future"} and {kind:"file"}).
+						st.cells.push({ id: `pu${st.cells.length}`, kind: "assistant", text: `${t("block.unknown")} · ${String(b.kind)}`, thinking: "" });
 					} else if (b.kind === "tool-call") {
 						if (claimedCall(turn, b.callId)) continue;
 						claimCall(turn, b.callId);

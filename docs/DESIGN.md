@@ -6568,3 +6568,59 @@ ratio3.01（阈值3）失败一次；空载复跑5/5通过，比率2.02。
 所以打印了"已加"。第二次改用逐行插入并断言插入数=3才真正落地。
 -变异"移除 role"第一次跑 exit=0——因为 `browser-check`读的是已构建的 `lib/client.js`，
 我没先 `build-client`。**变异前必须重建**，否则测的是旧产物。
+
+
+###13.29 Codex独立审查找到的3条真缺陷（2026-11-21）
+
+独立审查（四个维度）在本轮又找到3条**确认可复现**的缺陷，全部已修 +变异守卫。
+
+####F1【P2】`requests[].step`是 Symbol →整个投影抛异常
+
+```
+TypeError: Cannot convert a Symbol value to a string
+ at deriveTraceTree (traceview-helpers.js:1139:32)
+```
+
+崩溃点是 `` const rk = `${r.turn}:${r.step}` `` ——模板字符串遇到 Symbol会抛。
+我此前把 nodes侧的 turn/step归一化了，但**请求侧的键拼接漏了**。
+
+修法：`const stepNo = seqOf(r.step); if (stepNo === null) { unplaceableRequests +=1; continue; }`。
+无法定键的请求计入"没有对应步骤"的提示，而不是让整块面板白屏。
+
+变异（忠实回滚整段，含提前返回）：干净翻红，报 `Cannot convert a Symbol value to a string`。
+
+####F5【P2】partial（流式）分支丢弃未知 block kind
+
+durable分支我这轮已改成 `[未知内容] · <kind>`，**streaming分支没同步**：
+
+```
+partial blocks [{"kind":"future"},{"kind":"file"}] → cells []
+```
+
+用户看到的是"模型这一步什么都没说"，而实际有内容。修法与 durable一致，
+实测变成 `block.unknown · future` / `block.unknown · file`。
+
+变异（把新分支条件改成 `false`）：`CODEXF the streaming branch dropped unknown block kinds: []`。
+
+>这类"改了一处、漏了同构的另一处"在本项目已出现多次（§13.25的C、§13.29的F5）。
+>经验：修一个分支时，**先 grep出所有同构分支**。
+
+####F3【P3】非对象请求行被静默丢弃
+
+`safeList`在设计上就过滤非对象（其他调用点需要对象），于是 `requests:[null]`、
+`requests:["x"]`直接消失，**既没显示也没计入 unplaced**，日志看起来是完整的。
+nodes侧有 `nodeStats.invalid`会报，requests侧不对称。
+
+修法：在构造请求列表时显式计数（不改 `safeList`，那会波及全部调用点）。
+
+变异：`CODEXF a null request row was not counted:0`
+
+####未采纳的两条
+
+- **F4**：`tvp1:cfoo#bar`被解析成 `callId="foo"` + `hint="bar"`。这是**文法设计**：
+`#`是"提示后缀"分隔符（`tvp1:e123#说明`）。callId含`#`属文法不支持的形状，
+且**没有任何代码路径会生成`c<callId>`锚点**（`anchorOf`只产出 `e<seq>`/`p<turn>s<step>`）。
+真实宿主 callId形如 `call_00_g4oU889k5HevUSW2ETYJ7473`，不含`#`/`%`。
+记录为已知边界，不改。
+- **F2**：orphan站的 subCalls不作为子站点投影。这与"孤儿工具结果"的设计一致
+（它本来就是一个孤立结果卡片），不改。

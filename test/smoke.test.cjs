@@ -4610,6 +4610,41 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 		}
 	}
 
+	// ── CODEXF: two defects found by the independent pre-release review ──────
+	{
+		const foldC = (o) => deriveTraceTree(Object.assign({ eventNodes: [], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, o), t);
+		const asstC = { kind: "assistant", seq:1, time:1e12, turn:1, step:1, messageId: "m", blocks: [{ kind: "text", text: "ok" }] };
+
+		// (a) A request whose `step` is a Symbol used to throw "Cannot convert a
+		// Symbol value to a string" from the `${turn}:${step}` key, blanking the panel.
+		// It must be counted as unplaceable instead.
+		{
+			const tr = foldC({ eventNodes: [asstC], requests: [{ purpose: "assistant", turn:1, step: Symbol("s"), startSeq:1 }] });
+			if (tr.stations.length ===0) throw new Error("CODEXF a Symbol request step left no stations");
+			if (tr.unplacedRequests <1) throw new Error("CODEXF an unkeyable request was not reported (unplaced=" + tr.unplacedRequests + ")");
+		}
+
+		// (b) The STREAMING branch dropped unknown block kinds while the durable branch
+		// named them — a live `file`/future block showed an empty step (cells []).
+		{
+			const tr = foldC({ partial: { turn:2, step:3, blocks: [{ kind: "future", payload: "LOST" }, { kind: "file", attachment: { name: "a.txt" } }] } });
+			const st = tr.stations.find((x) => x.kind === "step");
+			const cells = st ? st.cells : [];
+			if (cells.length !==2) throw new Error("CODEXF the streaming branch dropped unknown block kinds: " + JSON.stringify(cells));
+			if (String(cells[0].text).indexOf("future") <0) throw new Error("CODEXF the unknown streaming kind was not named: " + JSON.stringify(cells[0]));
+		}
+	}
+
+	// (c) A non-object row in `requests` was dropped by `safeList` and never counted,
+	// so a log carrying it looked complete. Nodes report theirs; requests must too.
+	{
+		const foldReq = (reqs) => deriveTraceTree({ eventNodes: [{ kind: "assistant", seq:1, time:1e12, turn:1, step:1, messageId: "m", blocks: [{ kind: "text", text: "ok" }] }], requests: reqs, callSchemas: new Map(), runningCalls: [], partial: null }, t);
+		const trNull = foldReq([null]);
+		if (trNull.unplacedRequests !==1) throw new Error("CODEXF a null request row was not counted: " + trNull.unplacedRequests);
+		const trStr = foldReq(["x"]);
+		if (trStr.unplacedRequests !==1) throw new Error("CODEXF a string request row was not counted: " + trStr.unplacedRequests);
+	}
+
 	// ── HUNT2: four silent-loss shapes found by a fresh hunt ─────────────────
 	{
 		const foldH2 = (o) => deriveTraceTree(Object.assign({ eventNodes: [], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, o), t);
