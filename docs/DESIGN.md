@@ -6454,3 +6454,44 @@ tool/result记录71,444
 
 1. **`runningCalls`从不落盘**——它只存在于实时快照里。所以 §13.15的 #10/§13.19的 P2c那些 runningCalls路径的修复，只在**流式进行中**有用，离线回放永远碰不到。
 2.真实日志里 `tool/result`有71,444条，**没有一条**带嵌套子调用。说明"子调用"这个 UI概念目前只能靠实时数据触发。
+
+
+###13.27命名口径统一（2026-11-21）
+
+此前项目有**三套名字**并存：
+
+|对象 |旧值 |
+|---|---|
+|本地目录 | `dsh-trajectory-traceview` |
+|包名 /插件 id | `dsh-trajectory-traceview-plus`（4710cb7起） |
+| GitHub仓库 | `MisonL/dsh-trajectory-traceview` |
+| `repository.url` |指向不带 `-plus`的仓库 |
+
+方向只能是**向 `-plus`靠**：去掉 `-plus`会与上游 `AFAP/dsh-trajectory-traceview`撞名，失去并存安装能力（`-plus`后缀正是4710cb7为并存而加的）。
+
+####实际执行
+
+1. GitHub仓库改名 → `MisonL/dsh-trajectory-traceview-plus`（旧名由 GitHub自动重定向）
+2.本地目录 → `/Volumes/Work/code/dsh-trajectory-traceview-plus`
+3. `git remote origin`、`package.json repository.url`同步
+4. README ×2的 Release徽章与链接改新仓库（**上游 AFAP引用保持不变**，那是事实陈述，不是自指）
+5. `docs/DESIGN.md`4处硬编码旧路径改为新路径
+6. `~/.dsh/profiles/web`：`link:`依赖值与 `node_modules`软链一并重建
+
+####验证
+
+从**新路径**重跑全部门禁，全部 exit0：
+
+```
+build-client --check一致
+node --check OK
+provenance --check exit=0
+smoke exit=0（93道守卫）
+browser-check exit=0
+```
+
+真宿主（新起的实例，读的是新路径的 `link:`）验证：插件正常挂载，**64站点 /零运行时错误** / KPI `2轮次58步骤57工具0错误26.4M请求 tokens`。
+
+####留档
+
+`npm publish`时 npm曾会警告 `repository.url`与包名不符；现在两者一致，该警告消失。
