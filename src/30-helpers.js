@@ -1460,7 +1460,7 @@
 						const plabel = b.kind === "image" ? t("block.image")
 							: `${t("block.other")}${typeof b.block === "object" && b.block !== null && typeof b.block.type === "string" ? ` · ${b.block.type}` : ""}`;
 						st.cells.push({ id: `po${st.cells.length}`, kind: "assistant", text: plabel, thinking: "" });
-					} else if (b.kind !== "text" && b.kind !== "reasoning") {
+					} else if (b.kind !== "text" && b.kind !== "reasoning" && b.kind !== "tool-call") {
 						// Same forward-compat rule as the durable loop: a kind this build does not
 						// know must be NAMED, not dropped. The streaming branch was missed when the
 						// durable one got the placeholder, so a live `file`/future block showed an

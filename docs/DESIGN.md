@@ -6624,3 +6624,49 @@ nodes侧有 `nodeStats.invalid`会报，requests侧不对称。
 记录为已知边界，不改。
 - **F2**：orphan站的 subCalls不作为子站点投影。这与"孤儿工具结果"的设计一致
 （它本来就是一个孤立结果卡片），不改。
+
+
+###13.30我在修 F5时又引入一条回归，被下一篇复核抓住（2026-11-22）
+
+§13.29的 F5（partial未知块命名）修完后，我另起一个**聚焦**的复核worker（上一个
+因为上下文烧到91%崩了）。它只看 `git show6287f2f`，一眼指出：
+
+> F2在 `src/30-helpers.js:1463`的未知块条件未排除 `tool-call`，且位于1469工具分支之前，
+>内存对比父提交确认 partial工具从 `tool/read/running=true`变为
+> `assistant/block.unknown · tool-call`，已有 runningCalls时则多出未知内容卡。
+
+复现（我自己跑）：
+
+```
+partial工具调用 → [{"id":"pu0","kind":"assistant","text":"block.unknown · tool-call"}]
+running+partial同调用 → [{"kind":"tool","name":"read"},{"kind":"assistant","text":"block.unknown · tool-call"}]
+```
+
+**两条都错**：工具调用变成"未知内容"卡片；同一次调用在 runningCalls里也存在时，
+还会多出一张假卡。
+
+根因：durable分支我写的是 `kind !== text && !== reasoning && !== tool-call`，
+streaming分支抄的时候**漏了第三个排除**，而它排在 `else if (kind === "tool-call")`
+**之前**，于是把工具调用整个截走了。
+
+修法：补上 `&& b.kind !== "tool-call"`。修后：
+
+```
+partial工具调用 → [{"kind":"tool","name":"read","running":true}]
+running+partial同调用 → [{"kind":"tool","name":"read"}] ←不再有假卡
+```
+
+守卫：`CODEXF`增加 (b2)两条断言。变异时**只改 streaming那一处**（同串在文件里
+出现两次，直接 replace会误伤 durable分支），用 `pu${`单元格定位回找：
+`CODEXF the streaming tool call did not become a tool cell: [...block.unknown · tool-call]`
+
+####这是同一个错误模式的第三次
+
+|次数 |场景 |漏了什么 |
+|---|---|---|
+|1 |§13.25 C：runningCall的 turn归一 |`ensureTurn`那行还在用原始 `c.turn` |
+|2 |§13.29 F5：durable加了未知块占位 |streaming分支没同步 |
+|3 |本条：给 streaming补占位 |**条件漏了 tool-call** |
+
+前两次是"漏了同构的另一处"，这次是"补的时候把条件写宽了"。结论一样：
+**改一个 `else if`链，必须把整条链的分支和顺序一起看**。

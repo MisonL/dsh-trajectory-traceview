@@ -4633,6 +4633,23 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			if (cells.length !==2) throw new Error("CODEXF the streaming branch dropped unknown block kinds: " + JSON.stringify(cells));
 			if (String(cells[0].text).indexOf("future") <0) throw new Error("CODEXF the unknown streaming kind was not named: " + JSON.stringify(cells[0]));
 		}
+
+		// (b2) The unknown-kind branch must NOT swallow `tool-call`: it runs BEFORE the
+		// tool branch, so an over-broad condition turned every live tool call into a
+		// bogus "[unknown] · tool-call" card (and produced a second card when the same
+		// call also arrived via runningCalls).
+		{
+			const trTool = foldC({ partial: { turn:1, step:1, blocks: [{ kind: "tool-call", callId: "c1", name: "read", argsRaw: "{}" }] } });
+			const stTool = trTool.stations.find((x) => x.kind === "step");
+			const toolCells = (stTool ? stTool.cells : []).filter((c) => c.kind === "tool");
+			if (toolCells.length !==1) throw new Error("CODEXF the streaming tool call did not become a tool cell: " + JSON.stringify(stTool ? stTool.cells : null));
+			if (toolCells[0].name !== "read") throw new Error("CODEXF the streaming tool cell lost its name: " + JSON.stringify(toolCells[0]));
+			// The same call arriving twice (runningCalls + partial) must not add an unknown card.
+			const trBoth = foldC({ runningCalls: [{ callId: "c1", turn:1, step:1, name: "read", argsRaw: "{}", time:1e12 }], partial: { turn:1, step:1, blocks: [{ kind: "tool-call", callId: "c1", name: "read", argsRaw: "{}" }] } });
+			const stBoth = trBoth.stations.find((x) => x.kind === "step");
+			const bogus = (stBoth ? stBoth.cells : []).filter((c) => String(c.text || "").indexOf("tool-call") >=0);
+			if (bogus.length !==0) throw new Error("CODEXF a duplicate unknown card appeared for a live tool call: " + JSON.stringify(bogus));
+		}
 	}
 
 	// (c) A non-object row in `requests` was dropped by `safeList` and never counted,
