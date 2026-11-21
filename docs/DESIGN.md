@@ -6331,3 +6331,28 @@ EXPORTLEAK1 the string id "~1" collided with a non-string ordinal: ["string-id"]
 ```
 
 （第一次变异没红，原因是我把序号写成 `flatCalls.size + 1`，每次调用都变——那是**不忠实的变异**，不能算证据。重写成"字符串原样 + 每身份稳定序号"才干净翻红。）
+
+### 13.23 跨 turn 隔离补测 + 一次不忠实变异的教训（2026-11-21）
+
+嵌套 Map 的**外层维度是 turn**，所以补测了跨 turn 复用同一 callId：
+
+| 场景 | 结果 |
+|---|---|
+| turn 1 与 turn 2 都用 callId `"dup"`，各带结果 | 两个 tool cell 各归各 turn，**orphan 0** |
+| turn 1 与 turn 2 都有一条 `"same"` 的 runningCall | `r1`、`r2` 都在 |
+
+变异：把外层键固定成 `"all"`（无视 turn）→
+
+```
+Error: live running count: 2
+```
+
+被既有的 running-count 守卫先拦下。这说明 turn 维度**本来就**有守卫覆盖，不是我新加的那条在独撑。
+
+#### 又一次不忠实变异
+
+本轮我为 `~` 碰撞写的第一版变异把序号写成 `flatCalls.size + 1`，每次调用都变，于是**没有任何碰撞**，守卫自然不红。我当时差点当成"守卫没覆盖"。
+
+判定标准应该是：**变异必须忠实还原"被修掉的那个实现"**，而不是"随便改成错的看看会不会红"。改错的方式错了，红不了是理所当然的。
+
+三次不忠实变异的记录：① 只改 producer 不改 consumer（TypeError）；② 序号自增导致不撞；③ 本条。

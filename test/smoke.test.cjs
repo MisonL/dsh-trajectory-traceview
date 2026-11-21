@@ -2090,6 +2090,23 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			if (runCells.join(",") !== "alpha,beta") {
 				throw new Error("EXPORTLEAK1 distinct Symbol running calls collapsed: " + JSON.stringify(runCells));
 			}
+			// Two different TURNS may legitimately reuse the same callId. Claims must be
+			// scoped per turn, otherwise turn 2's call is suppressed as "already attached".
+			{
+				const cross = deriveTraceTree({
+					eventNodes: [
+					{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, messageId: "m1", blocks: [{ kind: "tool-call", callId: "dup", name: "t1tool", argsRaw: "{}" }] },
+					{ kind: "tool-result", seq: 2, time: 1e12, turn: 1, callId: "dup", call: { name: "t1tool", argsRaw: "{}" }, content: [{ type: "text", text: "OUT1" }], subCalls: [] },
+					{ kind: "assistant", seq: 3, time: 1e12, turn: 2, step: 1, messageId: "m2", blocks: [{ kind: "tool-call", callId: "dup", name: "t2tool", argsRaw: "{}" }] },
+					{ kind: "tool-result", seq: 4, time: 1e12, turn: 2, callId: "dup", call: { name: "t2tool", argsRaw: "{}" }, content: [{ type: "text", text: "OUT2" }], subCalls: [] }
+				], requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+				}, t);
+				const names = cross.stations.filter((x) => x.kind === "step").flatMap((x) => x.cells ?? []).filter((c) => c.kind === "tool").map((c) => c.name);
+				if (names.join(",") !== "t1tool,t2tool") throw new Error("EXPORTLEAK1 cross-turn callIds collided: " + JSON.stringify(names));
+				const orphanCount = cross.stations.filter((x) => x.kind === "orphan-tool").length;
+				if (orphanCount !== 0) throw new Error("EXPORTLEAK1 cross-turn results were mis-paired (orphans=" + orphanCount + ")");
+			}
+
 			// Any string id must coexist with a non-string one. Every flat-string encoding
 			// collided with SOME real id in turn: `#1` met the ordinal `#1`, then `~1` met the
 			// `~`-prefixed ordinal. The pairing now uses a nested Map keyed on the raw id, so
