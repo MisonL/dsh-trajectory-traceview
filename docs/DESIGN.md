@@ -189,7 +189,7 @@
 
 ### D5 — 身份与打包改造（**已落地，2026-11-12**）
 
-下表"本方案"列已全部实施并实测（`refactor(D5)` 提交）。实测方式：`dsh plugin --profile web remove dsh-trajectory-traceview` → `add /Volumes/Work/code/dsh-trajectory-traceview` → 重启 → 页面断言 style 标签为 `dsh-trajectory-traceview-plus/traceview.css`、页签仍为 3 个、77 站点 / 72 步骤跨度 / 5 孤立站点 —— 全部符合。
+下表"本方案"列已全部实施并实测（`refactor(D5)` 提交）。实测方式：`dsh plugin --profile web remove dsh-trajectory-traceview` → `add /Volumes/Work/code/dsh-trajectory-traceview-plus` → 重启 → 页面断言 style 标签为 `dsh-trajectory-traceview-plus/traceview.css`、页签仍为 3 个、77 站点 / 72 步骤跨度 / 5 孤立站点 —— 全部符合。
 
 > 顺带修正一处判断：变更 `package.json` 的 `name` 之后，**必须先 remove 旧包名再 add**，否则 pnpm 的 link 目录名（旧名）与包内 `name`（新名）不一致，profile 里会留下一个指向同一目录、却以旧名注册的依赖。
 
@@ -833,7 +833,7 @@ D2 从"全史检索"降级为"已加载窗口内检索"后，代码上的实际�
 | 忽略 `loading` 状态 | 红 |
 | 把 `hasMore !== true` 写成 `if (hasMore)` | 红 |
 
-**真实数据验证**（本机 web profile，2026-11-12 21:5x，装的是本仓库代码，`dsh plugin --profile web add /Volumes/Work/code/dsh-trajectory-traceview`）：
+**真实数据验证**（本机 web profile，2026-11-12 21:5x，装的是本仓库代码，`dsh plugin --profile web add /Volumes/Work/code/dsh-trajectory-traceview-plus`）：
 
 | 观测 | 值 |
 |---|---|
@@ -3417,7 +3417,7 @@ DSH 客户端模块系统直接抓取 `lib/client.js` 这一个经典脚本，�
 
 #### 六、安装态验证（用户明确要求"安装好运行中的插件"）
 
-- 符号链接：`~/.dsh/profiles/web/node_modules/dsh-trajectory-traceview-plus -> /Volumes/Work/code/dsh-trajectory-traceview` ✓
+- 符号链接：`~/.dsh/profiles/web/node_modules/dsh-trajectory-traceview-plus -> /Volumes/Work/code/dsh-trajectory-traceview-plus` ✓
 - 从宿主实际抓取的合包里逐段查找最新代码：`TITLE_PREVIEW_CHARS`、`buildNext`、`dstv_visuallyHidden` **全部存在** ✓
 - 结论：宿主提供的正是当前源码，无需重装。
 
@@ -5546,7 +5546,7 @@ document.scrollWidth = 384  →  整页横向滚动 9px
 
 #### 怎么跑的
 
-这台机器上 `web` profile 里装的就是这个仓库的软链（`dsh-trajectory-traceview-plus: link:/Volumes/Work/code/dsh-trajectory-traceview`），所以 `dsh web` 起来的宿主加载的就是**当前源码**。
+这台机器上 `web` profile 里装的就是这个仓库的软链（`dsh-trajectory-traceview-plus: link:/Volumes/Work/code/dsh-trajectory-traceview-plus`），所以 `dsh web` 起来的宿主加载的就是**当前源码**。
 
 ```
 dsh web --no-open --port 0    → http://127.0.0.1:55979/?token=…

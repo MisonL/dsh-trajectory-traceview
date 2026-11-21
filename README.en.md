@@ -12,7 +12,7 @@
 > **This is the Plus edition, not upstream.** Built on [AFAP/dsh-trajectory-traceview](https://github.com/AFAP/dsh-trajectory-traceview) (MIT): every upstream capability is kept, plus stable anchors, orphan tool-result stations, inline durations, a clock axis, and an explicit search-scope badge. **Do not install both** (you would get two "Trace View" tabs) — run `dsh plugin --profile web remove dsh-trajectory-traceview` first.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/MisonL/dsh-trajectory-traceview)](https://github.com/MisonL/dsh-trajectory-traceview/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/MisonL/dsh-trajectory-traceview-plus)](https://github.com/MisonL/dsh-trajectory-traceview-plus/releases)
 
 ---
 
@@ -115,7 +115,7 @@ dsh-trajectory-traceview/   # repo root (npm package name is dsh-trajectory-trac
 One-line install (GitHub):
 
 ```powershell
-dsh plugin --profile web add github:MisonL/dsh-trajectory-traceview
+dsh plugin --profile web add github:MisonL/dsh-trajectory-traceview-plus
 ```
 
 Then **restart `dsh web`** to take effect.

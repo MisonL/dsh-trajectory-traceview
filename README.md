@@ -12,7 +12,7 @@
 **版本基线**：分叉自上游 `v0.3.0`（commit `2d1d07d`，2026-08-26）。上游此后未再更新（仓库共 3 个提交）。本仓从 `0.4.0` 起自主演进，**版本号与上游不再对齐**——不要拿本仓的 `0.9.x` 去推断上游版本。版本规则见 [§11](#11-版本与发布规则)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/MisonL/dsh-trajectory-traceview)](https://github.com/MisonL/dsh-trajectory-traceview/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/MisonL/dsh-trajectory-traceview-plus)](https://github.com/MisonL/dsh-trajectory-traceview-plus/releases)
 
 ---
 
@@ -118,7 +118,7 @@ dsh-trajectory-traceview/   # 仓库根（npm 包名为 dsh-trajectory-traceview
 一键安装（GitHub）：
 
 ```powershell
-dsh plugin --profile web add github:MisonL/dsh-trajectory-traceview
+dsh plugin --profile web add github:MisonL/dsh-trajectory-traceview-plus
 ```
 
 然后**重启 `dsh web`** 生效。

@@ -28,7 +28,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MisonL/dsh-trajectory-traceview.git"
+    "url": "git+https://github.com/MisonL/dsh-trajectory-traceview-plus.git"
   },
   "files": [
     "lib/index.js",
