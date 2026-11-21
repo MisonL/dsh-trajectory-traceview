@@ -6081,3 +6081,35 @@ Codex 报的 11 条里，三条是**白屏级**：都在任何 station 组装之
 #### 仍未修
 
 §13.13 余下 8 条（compaction request 丢弃、`providerMetadata.model`、orphan 丢 `name`、sub-call 导出截断无标记、KPI 忽略 node usage、partial 多 text 只留第一段、非字符串 callId 消失、重复 orphan id）**仍在**。它们不崩溃，但都属于"静默丢数据 / 说谎的界面"，需要单独的语义决策（例如 KPI 是否该含子调用错误），我留给下一轮而不是顺手改——顺手改正是 §13.11 那个回退的成因。
+
+### 13.15 修完审计余下 8 条：11/11 全绿（2026-11-21）
+
+§13.13 的 8 条"不崩溃但静默出错"的缺陷全部修完。每条都是：探针确认现状 → 修 → 探针转绿 → 新增守卫 → 变异翻红。
+
+| # | 修法 | 变异后守卫报的错 |
+|---|---|---|
+| 4 | 未被 marker 消费的 compaction request 计入 `unplacedRequests` | `UNPLACEDREQ1 expected 1, got 0` |
+| 5 | `modelHint` fallback 链补上 `providerMetadata.model`（当前契约字段） | `AUDIT1 model was ignored (hint=null)` |
+| 6 | orphan 先用 `n.name`，再退 `n.call?.name` | `AUDIT1 orphan lost its node name` |
+| 7 | sub-call 截断加 `…(N chars)` 标记 | `AUDIT1 truncation carries no marker` |
+| 8 | KPI 与详情用**同一个** effective usage，只累加一次 | `stats.tokensIn: 0` |
+| 9 | partial 按**内容**去重，不再按 kind | `AUDIT1 later text blocks were dropped: ["A"]` |
+| 10 | 任意 callId 的 tool-result 都进 orphan；新增 `displayCallId` 安全字符串化 | `AUDIT1 Symbol callId disappeared (stations=0)` |
+| S2 | orphan id 改用 seq + ordinal，不再用 callId | `EXPORTLEAK1 Symbol value to a string` |
+
+#### 过程中自己造成的两个 bug（都是先红后修）
+
+1. **`pushSubLines` 用了未定义的 `t`**：我给截断标记加 `t("detail.chars")`，但这个函数签名里没有 `t`。`node --check` 查不出（运行时才抛 `ReferenceError`），是探针抓到的。已把 `t` 作为参数透传，并保留"没有 `t` 就不加单位"的降级。
+2. **`UNPLACEDREQ1` 守卫本身断言的是旧缺陷行为**：它写死"一条无 marker 的 compaction request 应计 0"，而那正是 Codex 指出的 #4。已改为期望 1，并补一条"有 marker 时计 0"的反向断言。
+
+#### 一处探针夹具错误
+
+#7 我最初的复现夹具写的是 `subCalls:[{callId:"k",...}]`，缺 `kind:"tool-result"`，于是 `subDetailOf` 走 running 分支、`resultText` 为空，导出里根本没有那一行——探针看起来"复现不了"。补上 `kind` 后立刻复现。**Codex 原始报告给的也是这个不完整形状**，所以它那条的复现路径其实和它描述的不完全一样；缺陷本身是真的。
+
+#### 现状
+
+```
+确证 0 / 反驳 11（每一项独立探针）
+守卫 91 → 92 道（新增 AUDIT1，内含 8 组子断言）
+build / provenance 一致 · smoke 通过 · browser-check PASS（12 项）
+```

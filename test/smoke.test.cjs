@@ -2277,7 +2277,21 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 			const got = foldRq(requests).unplacedRequests;
 			if (got !== expect) throw new Error("UNPLACEDREQ1 " + label + ": expected " + expect + ", got " + got);
 		};
-		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "compaction", turn: 1, step: 1 }], 0, "a fully matched list");
+		// A compaction request with NO compaction marker in the window was silently
+		// discarded (measured: stations=0, unplaced=0 — the request simply vanished).
+		// It has no matching step, so it must be counted. This assertion used to encode
+		// the buggy behaviour and was updated with the fix.
+		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "compaction", turn: 1, step: 1 }], 1, "a compaction request with no marker");
+		// ...and one that DOES have its marker must not be counted.
+		{
+			const nodesCm = nodesRq.concat([{ kind: "compaction", seq: 3, time: 1e12, summary: "S", shadowedItemCount: 1, shadowedTokenCount: 10 }]);
+			const got = deriveTraceTree({
+				eventNodes: nodesCm,
+				requests: [{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "compaction", turn: 1, step: 1, replacementSeq: 3 }],
+				callSchemas: new Map(), runningCalls: [], partial: null
+			}, t).unplacedRequests;
+			if (got !== 0) throw new Error("UNPLACEDREQ1 a compaction request WITH its marker must not count: got " + got);
+		}
 		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "assistant", turn: 9, step: 1 }], 1, "a request for a step that is not there");
 		count([{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "weird", turn: 1, step: 1 }], 1, "an unknown purpose");
 		count([{ purpose: "assistant", step: 1 }], 1, "a request with no turn");
@@ -4415,6 +4429,82 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("正�
 	if (h4.hash !== "#tvp1:e3019" || h4.changed !== false) throw new Error("G2 must never clear a hash by accident");
 	const h5 = nextHashFor("#keep", null);
 	if (h5.hash !== "#keep" || h5.changed !== false) throw new Error("G2 must tolerate a missing anchor");
+
+	// ── AUDIT1: the eight "quiet" defects an independent audit found ────────
+	// Each was reproduced against the real DSH 0.2.2-rc.2 contract shapes. None of them
+	// crash: they lose a record, mislabel it, or show a number that contradicts the
+	// detail panel — which is why no crash-oriented guard caught them.
+	{
+		const foldAudit = (o) => deriveTraceTree(Object.assign({ eventNodes: [], requests: [], callSchemas: new Map(), runningCalls: [], partial: null }, o), t);
+
+		// (1) a compaction request whose marker is not in the window must be counted, not dropped.
+		{
+			const got = foldAudit({ requests: [{ purpose: "compaction", status: "running", startSeq: 4, startedAt: 1, completedAt: null, turn: null, step: 0 }] }).unplacedRequests;
+			if (got !== 1) throw new Error("AUDIT1 an unmatched compaction request vanished (unplaced=" + got + ")");
+		}
+
+		// (2) the assistant node carries its model on `providerMetadata`; the view used to
+		//     read only `requestConfig`/`provenance` and show no model at all.
+		{
+			const trM = foldAudit({ eventNodes: [{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, providerMetadata: { provider: "deepseek", model: "deepseek-chat" }, blocks: [{ kind: "text", text: "ok" }] }] });
+			const hint = trM.stations.find((x) => x.kind === "step").modelHint;
+			if (hint !== "deepseek-chat") throw new Error("AUDIT1 the assistant node model was ignored (hint=" + String(hint) + ")");
+		}
+
+		// (3) an orphan tool-result must keep the node's own `name` when `call` is null.
+		{
+			const ot = foldAudit({ eventNodes: [{ kind: "tool-result", seq: 1, time: 1e12, callId: "c", name: "bash", call: null, content: [{ type: "text", text: "out" }], isError: false, subCalls: [] }] }).stations[0];
+			if (ot.name !== "bash") throw new Error("AUDIT1 an orphan lost its node name (got " + String(ot.name) + ")");
+		}
+
+		// (4) KPI must agree with the detail panel when only the node carries usage.
+		{
+			const trU = foldAudit({ eventNodes: [{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, messageId: "m", usage: { inputTokens: 10, outputTokens: 7 }, blocks: [{ kind: "text", text: "ok" }] }], requests: [{ purpose: "assistant", startSeq: 1, turn: 1, step: 1, status: "ok" }] });
+			if (trU.stats.tokensIn !== 10 || trU.stats.tokensOut !== 7) {
+				throw new Error("AUDIT1 the KPI ignored node usage: in=" + trU.stats.tokensIn + " out=" + trU.stats.tokensOut);
+			}
+			// ...and a step carrying BOTH must not be counted twice.
+			const trD = foldAudit({ eventNodes: [{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, messageId: "m", usage: { inputTokens: 10, outputTokens: 7 }, blocks: [{ kind: "text", text: "ok" }] }], requests: [{ purpose: "assistant", startSeq: 1, turn: 1, step: 1, status: "ok", usage: { inputTokens: 10, outputTokens: 7 } }] });
+			if (trD.stats.tokensIn !== 10) throw new Error("AUDIT1 request+node usage was double-counted: in=" + trD.stats.tokensIn);
+		}
+
+		// (5) a streaming partial with several text blocks must keep ALL of them.
+		{
+			const trP = foldAudit({ partial: { turn: 1, step: 1, blocks: [{ kind: "text", text: "A" }, { kind: "text", text: "B" }] } });
+			const texts = trP.stations.find((x) => x.kind === "step").cells.filter((c) => c.kind === "assistant").map((c) => c.text);
+			if (texts.join(",") !== "A,B") throw new Error("AUDIT1 later partial text blocks were dropped: " + JSON.stringify(texts));
+		}
+
+		// (6) a non-string callId must still surface its result, and must not produce a
+		//     station id that is not a string.
+		{
+			const symId = Symbol("id");
+			const trN = foldAudit({ eventNodes: [{ kind: "tool-result", seq: 1, time: 1e12, callId: symId, content: [{ type: "text", text: "out" }], isError: false, subCalls: [] }] });
+			if (trN.stations.length !== 1) throw new Error("AUDIT1 a Symbol callId result disappeared (stations=" + trN.stations.length + ")");
+			if (typeof trN.stations[0].id !== "string") throw new Error("AUDIT1 the orphan id is not a string");
+		}
+
+		// (7) duplicate orphan callIds must not collide into one React key.
+		{
+			const trS = foldAudit({ eventNodes: [
+				{ kind: "tool-result", seq: 1, time: 1e12, callId: "dup", call: { name: "a", argsRaw: "{}" }, content: [{ type: "text", text: "1" }], subCalls: [] },
+				{ kind: "tool-result", seq: 2, time: 1e12, callId: "dup", call: { name: "b", argsRaw: "{}" }, content: [{ type: "text", text: "2" }], subCalls: [] }
+			] });
+			const ids = trS.stations.map((x) => x.id);
+			if (new Set(ids).size !== ids.length) throw new Error("AUDIT1 duplicate orphan ids: " + JSON.stringify(ids));
+		}
+
+		// (8) a truncated sub-call result must SAY it was truncated.
+		{
+			const trT = foldAudit({ eventNodes: [
+				{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }, { kind: "tool-call", callId: "c", name: "p", argsRaw: "{}" }] },
+				{ kind: "tool-result", seq: 2, time: 1e12, callId: "c", call: { name: "p", argsRaw: "{}" }, content: [{ type: "text", text: "top" }], subCalls: [{ kind: "tool-result", seq: 3, callId: "k", name: "child", content: [{ type: "text", text: "x".repeat(500) }] }] }
+			] });
+			const mdSub = buildStepMarkdown(trT.stations.find((x) => x.kind === "step"), [], false, t);
+			if (mdSub.indexOf("x".repeat(161)) >= 0) throw new Error("AUDIT1 the sub-call result was not truncated at 160");
+			if (!/\(500\b/.test(mdSub)) throw new Error("AUDIT1 the sub-call truncation carries no marker");
+		}
+	}
 
 	// ── HOSTILE2: three malformed-host shapes must not take the panel down ──
 	// All three were reproduced against the real DSH 0.2.2-rc.2 record shapes and each
