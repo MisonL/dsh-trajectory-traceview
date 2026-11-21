@@ -1911,7 +1911,7 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 		const boxRf = {
 			console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date,
 			RegExp, isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise, Intl,
-			react: require("react"), jsx: rtRf.jsx, jsxs: rtRf.jsx, fragment: rtRf.Fragment,
+			react: require("react"), jsx: rtRf.jsx, jsxs: rtRf.jsxs, fragment: rtRf.Fragment,
 			document: void 0, window: void 0, location: void 0
 		};
 		boxRf.globalThis = boxRf;
@@ -2406,7 +2406,7 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			const vmPg = require("node:vm");
 			const boxPg = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
 				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
-				react: ReactPg, jsx: rtPg.jsx, jsxs: rtPg.jsx, fragment: rtPg.Fragment,
+				react: ReactPg, jsx: rtPg.jsx, jsxs: rtPg.jsxs, fragment: rtPg.Fragment,
 				document: void 0, window: void 0, location: void 0 };
 			boxPg.globalThis = boxPg;
 			vmPg.createContext(boxPg);
@@ -2815,7 +2815,7 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			const vmMi = require("node:vm");
 			const boxMi = { console, JSON, Set, Map, WeakSet, Math, String, Object, Array, Number, Boolean, Date, RegExp,
 				isFinite, parseInt, parseFloat, Error, TypeError, Symbol, Promise,
-				react: ReactMi, jsx: rtMi.jsx, jsxs: rtMi.jsx, fragment: rtMi.Fragment,
+				react: ReactMi, jsx: rtMi.jsx, jsxs: rtMi.jsxs, fragment: rtMi.Fragment,
 				document: void 0, window: void 0, location: void 0 };
 			boxMi.globalThis = boxMi;
 			vmMi.createContext(boxMi);
