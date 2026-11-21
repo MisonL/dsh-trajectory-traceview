@@ -2062,9 +2062,13 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 		// the Symbol `callId` never showed up often enough for the loop above to catch a
 		// regression in `cellId` (measured: the mutation stayed green).
 		{
-			const foldOne = (node) => deriveTraceTree({
+			// `runningCalls` used to be hardcoded empty here, so the case labelled "a Symbol
+			// running call id" never actually exercised a running call â€” it was a text block
+			// with an empty list. That hole is why two distinct Symbols collapsing in `callKey`
+			// went unnoticed.
+			const foldOne = (node, running) => deriveTraceTree({
 				eventNodes: [Object.assign({ seq: 1, time: 1e12, turn: 1 }, node)],
-				requests: [], callSchemas: new Map(), runningCalls: [], partial: null
+				requests: [], callSchemas: new Map(), runningCalls: running ?? [], partial: null
 			}, t);
 			const symOne = Symbol("c1");
 			const cases = [
@@ -2073,6 +2077,19 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 				["a NaN turn", { kind: "turn-error", turn: NaN, message: "m" }],
 				["an Infinity retry count", { kind: "model-retry", retry: 1, maxRetries: Infinity, failure: { message: "f" } }]
 			];
+			// Two DISTINCT Symbols sharing a description used to collapse into one key, so the
+			// second running call vanished. `callKey` now gives each identity its own ordinal.
+			const symRunA = Symbol("same");
+			const symRunB = Symbol("same");
+			const runningPair = [
+				{ callId: symRunA, turn: 1, step: 1, name: "alpha", argsRaw: "{}", time: 1e12 },
+				{ callId: symRunB, turn: 1, step: 1, name: "beta", argsRaw: "{}", time: 1e12 }
+			];
+			const runCells = foldOne({ kind: "assistant", step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }, runningPair)
+				.stations.filter((x) => x.kind === "step").flatMap((x) => x.cells ?? []).filter((c) => c.kind === "tool").map((c) => c.name);
+			if (runCells.join(",") !== "alpha,beta") {
+				throw new Error("EXPORTLEAK1 distinct Symbol running calls collapsed: " + JSON.stringify(runCells));
+			}
 			for (const [label, node] of cases) {
 				try {
 					foldOne(node);
@@ -4501,6 +4518,30 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			if (orphansPair.length !== 0) throw new Error("AUDIT1 a paired result was ALSO shown as an orphan (" + orphansPair.length + ")");
 		}
 
+		// (6c) an orphan id must be STABLE when older history is prepended. Ids double as
+		// the selection pin, so a shifting ordinal made the pin point at a different record
+		// after paging ("ot1000" became "ot1001" once an earlier seq appeared).
+		{
+			const orphanOf = (seqs) => foldAudit({ eventNodes: seqs.map((q) => ({ kind: "tool-result", seq: q, time: 1e12, callId: "c" + q, call: { name: "n", argsRaw: "{}" }, content: [{ type: "text", text: "x" }], subCalls: [] })) }).stations.map((x) => x.id);
+			const alone = orphanOf([100]);
+			const withEarlier = orphanOf([50, 100]);
+			if (alone[0] !== withEarlier[1]) {
+				throw new Error("AUDIT1 an orphan id changed when history was prepended: " + JSON.stringify(alone) + " vs " + JSON.stringify(withEarlier));
+			}
+			if (new Set(withEarlier).size !== withEarlier.length) throw new Error("AUDIT1 duplicate orphan ids: " + JSON.stringify(withEarlier));
+		}
+
+		// (6d) two separate partial text blocks with the SAME text are two parts, not one.
+		// Collapsing by content silently merged them; the durable copy is still deduped.
+		{
+			const textsOf = (o) => foldAudit(o).stations.find((x) => x.kind === "step").cells.filter((c) => c.kind === "assistant").map((c) => c.text);
+			const dupParts = textsOf({ partial: { turn: 1, step: 1, blocks: [{ kind: "text", text: "X" }, { kind: "text", text: "X" }] } });
+			if (dupParts.length !== 2) throw new Error("AUDIT1 two identical partial parts collapsed: " + JSON.stringify(dupParts));
+			// ...while a partial that merely REPEATS the durable text must still be suppressed.
+			const repeatDurable = textsOf({ eventNodes: [{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "text", text: "A" }] }], partial: { turn: 1, step: 1, blocks: [{ kind: "text", text: "A" }] } });
+			if (repeatDurable.join(",") !== "A") throw new Error("AUDIT1 a repeated durable text was duplicated: " + JSON.stringify(repeatDurable));
+		}
+
 		// (7) duplicate orphan callIds must not collide into one React key.
 		{
 			const trS = foldAudit({ eventNodes: [
@@ -4608,7 +4649,20 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			{ purpose: "assistant", turn: 1, step: 1, status: "ok", startSeq: 2, startedAt: 1000, completedAt: 2800, prompt: { system: "B" } }
 		];
 		const folded = deriveTraceTree({ eventNodes: nodesDup, requests: reqs, callSchemas: new Map(), runningCalls: [], partial: null }, t);
-		if (folded.unplacedRequests !== 1) throw new Error("LOSS1 duplicate turn:step requests: expected 1 unplaced, got " + folded.unplacedRequests);
+		// A second request for the SAME turn:step is a RETRY of a step that exists, not a
+		// request without a step. Counting it produced a header warning on a healthy retried
+		// log (the pre-bucket `Map.set` reported 0). This assertion used to demand 1 and was
+		// therefore pinning a false alarm â€” caught by an independent review.
+		if (folded.unplacedRequests !== 0) throw new Error("LOSS1 a retried step must not be reported as unplaced: got " + folded.unplacedRequests);
+		// A request whose turn:step matches NO station must still be reported.
+		{
+			const stray = deriveTraceTree({
+				eventNodes: nodesDup,
+				requests: [{ purpose: "assistant", turn: 1, step: 1 }, { purpose: "assistant", turn: 9, step: 1 }],
+				callSchemas: new Map(), runningCalls: [], partial: null
+			}, t);
+			if (stray.unplacedRequests !== 1) throw new Error("LOSS1 a request with no station must be reported: got " + stray.unplacedRequests);
+		}
 		// WHICH attempt wins matters. The original `Map.set` kept the LAST one, so a step
 		// that failed then succeeded must show "ok" â€” not the stale error from attempt 1.
 		const stepStation = folded.stations.find((x) => x.kind === "step");

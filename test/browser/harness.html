@@ -36098,7 +36098,17 @@ window.__ModuleLoader__.load({
 			const attachedCalls = new Map();
 			const claimCall = (ck) => { const n = attachedCalls.get(ck) ?? 0; attachedCalls.set(ck, n + 1); return n; };
 			const claimedCall = (ck) => (attachedCalls.get(ck) ?? 0) > 0;
-			const callKey = (turn, callId) => `${String(turn)}:${String(callId)}`;
+			// `String(callId)` collapses two DISTINCT Symbols that share a description
+			// (`Symbol("same")` twice), so one of two real running calls silently vanished.
+			// Strings are by far the common case and stay verbatim; any other value gets a
+			// stable per-identity ordinal from a Map (SameValueZero keeps Symbols apart).
+			const callOrdinals = new Map();
+			const callKey = (turn, callId) => {
+				if (typeof callId === "string") return `${String(turn)}:${callId}`;
+				let ord = callOrdinals.get(callId);
+				if (ord === void 0) { ord = callOrdinals.size + 1; callOrdinals.set(callId, ord); }
+				return `${String(turn)}:#${String(ord)}`;
+			};
 			/**
 			 * Cell ids double as React keys, and `callId` comes straight from the log. A
 			 * template literal calls ToString, which THROWS on a Symbol — one damaged
@@ -36127,6 +36137,10 @@ window.__ModuleLoader__.load({
 			// the earlier one. Keep every request per key in log order; a station consumes the
 			// earliest unclaimed one, and leftovers are counted as unplaced, never discarded.
 			const requestsByStep = new Map();
+			// Keys that actually FOUND a station. A leftover in such a bucket is an earlier
+			// attempt at a step that exists (a retry); a leftover in an unmatched bucket is a
+			// request with no step at all. Only the latter belongs in `unplacedRequests`.
+			const matchedRequestKeys = new Set();
 			const compactionReqs = [];
 			let unplaceableRequests = 0;
 			// Keys that actually found a step. Anything left over is a request the log
@@ -36427,25 +36441,27 @@ window.__ModuleLoader__.load({
 				// emits one `text` block per content part, so a reply that resumed after a
 				// tool call lost everything after its first part. Only an identical string
 				// (the durable copy already present) is suppressed.
-				const existingTexts = new Set(st.cells.filter((c) => c.kind === "assistant" && typeof c.thinking === "string" && c.thinking === "").map((c) => c.text));
-				const existingThinking = new Set(st.cells.filter((c) => typeof c.thinking === "string" && c.thinking !== "").map((c) => c.thinking));
+				// Snapshot of what the DURABLE blocks already put on this step. The partial is
+				// a re-send of the in-flight reply, so repeating durable content must not
+				// duplicate it — but distinct partial parts must not collapse into each other.
+				const durableTexts = new Set(st.cells.filter((c) => c.kind === "assistant" && typeof c.thinking === "string" && c.thinking === "").map((c) => c.text));
+				const durableThinking = new Set(st.cells.filter((c) => typeof c.thinking === "string" && c.thinking !== "").map((c) => c.thinking));
 				// Same guard as the durable loop: a null/primitive block must be skipped, not
 				// throw. The 0.9.26 fix hardened `blocks` in the durable path only, so a
 				// malformed PARTIAL still crashed the entire view (found by fuzzing).
 				for (const b of Array.isArray(p.blocks) ? p.blocks : []) {
 					if (b == null || typeof b !== "object") continue;
-					if (b.kind === "text" && typeof b.text === "string" && b.text !== "" && !existingTexts.has(b.text)) {
-						// The id used to be `pa${text.length}`, so two different blocks of the
-						// same length collided into one React key.
+					if (b.kind === "text" && typeof b.text === "string" && b.text !== "" && !durableTexts.has(b.text)) {
+						// Dedupe ONLY against what the durable node already contributed. Two
+						// separate blocks that happen to contain the same string are still two
+						// parts; adding each to the dedupe set made the second vanish.
 						st.cells.push({ id: `pa${st.cells.length}`, kind: "assistant", text: b.text, thinking: "" });
-						existingTexts.add(b.text);
 					} else if (b.kind === "reasoning" && typeof b.text === "string" && b.text !== ""
 						// Tool cells carry no `thinking` at all, and `undefined !== ""` is true —
 						// so any tool call in this step made the reasoning look already-taken
 						// and it was dropped. Only cells that actually hold prose count.
-						&& !existingThinking.has(b.text)) {
+						&& !durableThinking.has(b.text)) {
 						st.cells.push({ id: `pr${st.cells.length}`, kind: "assistant", text: "", thinking: b.text });
-						existingThinking.add(b.text);
 					} else if (b.kind === "image" || b.kind === "other") {
 						// The durable loop got this placeholder in the same change; the STREAMING
 						// branch was missed, so a live image reply showed an empty step until the
@@ -36601,7 +36617,13 @@ window.__ModuleLoader__.load({
 			// view renders these too (via `resultAsText(resultPreview)`), so dropping them
 			// silently would under-report work actually done.
 			{
-				let orphanOrdinal = 0;
+				// Station ids double as React keys AND as the selection pin's identity, so they
+				// must be unique across rebuilds **and stable when older history is prepended**.
+				// A running ordinal does neither: adding one earlier node renumbered every later
+				// orphan (`ot1000` became `ot1001`), so the pinned selection pointed elsewhere
+				// after paging. Count per seq value instead — an earlier seq cannot change the
+				// counter of a later one.
+				const orphanSeen = new Map();
 				const orphans = nodes
 					// Use the RESULT objects, not the call ids: with a duplicated id the id
 					// is "attached" while the second result was never shown anywhere.
@@ -36610,6 +36632,16 @@ window.__ModuleLoader__.load({
 					// no station and no warning.
 					.filter((n) => n.kind === "tool-result" && !consumedResults.has(n))
 					.sort((a, b) => a.seq - b.seq);
+				const orphanId = (seq) => {
+					const seen = orphanSeen.get(seq) ?? 0;
+					orphanSeen.set(seq, seen + 1);
+					// `seqOf` pins an unusable seq to null, so `null` is the common malformed case;
+					// a readable "x" beats describing it as "[object]".
+					const base = seq == null ? "x"
+						: (typeof seq === "number" && Number.isFinite(seq) ? String(seq)
+							: (typeof seq === "string" && seq !== "" ? seq : displayCallId(seq)));
+					return `ot${base}${seen === 0 ? "" : `_${String(seen)}`}`;
+				};
 				for (const n of orphans) {
 					const e = turnForSeq(n.seq);
 					const text = blocksText(n.content, t);
@@ -36619,9 +36651,9 @@ window.__ModuleLoader__.load({
 					e.stations.push({
 						// `id` was `ot${callId}`: two orphan results sharing an id produced the
 						// SAME React key (measured `["otdup","otdup"]`), and a non-string callId
-						// threw inside the template literal. seq is stable and unique enough;
-						// the ordinal covers duplicate seqs.
-						id: `ot${typeof n.seq === "number" ? String(n.seq) : "x"}${orphanOrdinal++}`,
+						// threw inside the template literal. Key on seq, which is stable, and
+						// suffix only the duplicates of that SAME seq.
+						id: orphanId(n.seq),
 						kind: "orphan-tool",
 						seq: n.seq,
 						time: n.time,
@@ -36723,10 +36755,13 @@ window.__ModuleLoader__.load({
 						// Every request in the bucket is a real record. Consume the LATEST one:
 						// the original `Map.set` kept the last attempt, so a step retried after a
 						// failure showed the final (successful) status. Taking the earliest here
-						// silently flipped such a step back to "error". Leftovers still get counted.
+						// silently flipped such a step back to "error". Leftovers are retained in
+						// the bucket but are NOT counted as unplaced: they are superseded retries
+						// of this same step, not requests without a step.
 						const found = bucket === void 0 ? void 0 : bucket.pop();
 						let request = null;
 						if (found !== void 0) {
+							matchedRequestKeys.add(key);
 							const r = found.req;
 							request = {
 								status: r.status,
@@ -36904,17 +36939,20 @@ window.__ModuleLoader__.load({
 				// rather than dropped, and shown in the header next to the node-drift chips.
 				unplacedRequests: (() => {
 					let n = unplaceableRequests;
-					for (const bucket of requestsByStep.values()) n += bucket.length;
+					// A leftover entry in a MATCHED bucket is NOT an unplaced request: it is an
+					// EARLIER attempt at the same turn:step (a retry). The step exists and shows
+					// the latest attempt, exactly as the pre-bucket `Map.set` did — counting the
+					// superseded attempt here produced a header warning on a perfectly healthy
+					// retried log (measured: error+ok on one step → unplaced=1, old behavior 0).
+					// A bucket that NEVER matched, however, is exactly "no matching step" and is
+					// reported (that case has its own guard: EXPORTDRIFT1).
+					for (const [key, bucket] of requestsByStep) if (!matchedRequestKeys.has(key)) n += bucket.length;
 					// A compaction request whose marker is not in the loaded window (still
 					// running, or the marker was paged out) matched no station at all. It was
 					// collected into `compactionReqs` and then simply forgotten: the log
 					// recorded a provider request and the view showed nothing. Count it here,
 					// which is exactly what "no matching step" means for this surface.
 					for (const r of compactionReqs) if (!consumedCompactionReqs.has(r)) n += 1;
-					// `shift()` already removed every request that found a step, so whatever
-					// remains is exactly the set of unplaced requests — counting both the
-					// bucket and the "key not consumed" flag would double-count them.
-
 					return n;
 				})()
 			};

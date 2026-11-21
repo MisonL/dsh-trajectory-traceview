@@ -6212,3 +6212,49 @@ AUDIT1 a Symbol callId did not pair with its result: [""]
 #### 教训
 
 **修"数据丢失"容易造成"数据重复"。** §13.11 是同类问题的另一次（改成了错误的一条优先）。两次都是：改动的方向对，但只盯着"别丢"，没检查"会不会多"。
+
+### 13.19 Codex 复核 §13.15–13.18：5 条问题，其中一条是我在**固化自己的误报**（2026-11-21）
+
+请 Codex 复核 454e8d0 与 1fe11f0。它报了 4 条，随后自己补发一条更正（说明前一条报告不应直接采用）。我逐条复现：
+
+| # | 严重度 | 问题 | 我的复现 | 采纳 |
+|---|---|---|---|---|
+| 1 | **P1** | 重试请求被计入 `unplacedRequests`，且 `LOSS1` 守卫**正期望这个误报** | `status=ok unplaced=1`（旧行为 0） | ✅ |
+| 2 | P2 | partial 两个独立 text 块内容相同 → 被合并成一个 | `["X"]` | ✅ |
+| 3 | P2 | orphan id 用全局 ordinal，分页后不稳定 | `ot1000` → 加入更早 seq 后变 `ot1001` | ✅ |
+| 4 | P2 | `callKey` 用 `String(callId)`，两个不同 Symbol 同描述被合并（仅 runningCalls 路径） | `["alpha"]` | ✅ |
+| 5 | P3 | 注释仍写 "earliest / shift"，实际是 `pop` | — | ✅ |
+
+它同时确认了 8 项修复正确（retry 显示 ok、usage 三种情形 10/7 · 20/3 · 20/3、compaction 计数 1/0/1、providerMetadata、orphan name、160/161/多行截断、各类 callId 转换、相同 Symbol 配对）。
+
+#### P1：这是本轮最该记住的一条
+
+我在 §13.09 把"同一 turn:step 的第二条请求"当成"丢数据"来修，于是把它计入 `unplacedRequests`——**但那是重试，步骤是存在的**。结果：一个完全健康的"失败后重试成功"的日志，头部会冒出"有 1 个请求没有对应步骤"的警告。旧 `Map.set` 报 0。
+
+更糟的是我写了 `LOSS1` 断言 `expected 1`，**把误报固化成契约**。Codex 明确指出"守卫期望 1 是错误行为"。
+
+修法：区分两种 leftover——
+- **匹配过的 bucket 里的剩余** = 重试，不计数（恢复旧语义）
+- **从未匹配过的 bucket** = 真的没有对应步骤，计数（`EXPORTDRIFT1` 守的就是这条）
+
+我第一版把两者一起不计数，`EXPORTDRIFT1` 立刻变红——**是它拦住了我的过度修正**。
+
+#### 其余四条
+
+- **P2a**：`existingTexts` 在循环里把自己也加进去，于是同内容的第二块被自己的集合挡住。改为只与 **durable 快照**比对。
+- **P2b**：`ot${seq}${全局ordinal}` 的 ordinal 会随更早的 seq 插入而整体后移，而 station id 同时是**选择 pin 的身份**（代码注释自己写着"unique AND stable across rebuilds"）。改为按 seq 值计数：`ot100` 恒为 `ot100`，重复 seq 才加 `_1`。
+- **P2c**：`callKey = String(callId)` 把两个 `Symbol("same")` 合成一个键。改为：字符串保持原样，非字符串用 Map 分配稳定序号。顺带发现 `test/smoke.test.cjs` 里名为 "a Symbol running call id" 的夹具**实际传的是 `runningCalls: []`**——名不副实，所以这条一直没被测到。已改成真正传入两个 Symbol running call。
+- **P3**：三处注释写着 earliest/shift，实际是 `pop`，已改。
+
+#### 变异证据（4 条全红）
+
+```
+orphan id 改回全局 ordinal → AUDIT1 an orphan id changed when history was prepended
+partial 同文块合并        → AUDIT1 two identical partial parts collapsed: ["X"]
+callKey 改回 String       → EXPORTLEAK1 distinct Symbol running calls collapsed: ["alpha"]
+重试计入 unplaced        → LOSS1 a retried step must not be reported as unplaced: got 1
+```
+
+#### 教训
+
+**连续两次**都是"我的守卫在断言错误行为"（先 `UNPLACEDREQ1`，再 `LOSS1`）。两次的共同点：我在修一个缺陷时，顺手给"修复后的样子"写断言，而没有先确认那个样子**本身是不是对的**。
