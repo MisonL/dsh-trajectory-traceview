@@ -299,5 +299,19 @@
 		.filter((v) => rootStyle.getPropertyValue(v).trim() === "");
 	if (missingVars.length > 0) fail("theme token(s) unresolved: " + missingVars.join(", "));
 
+	//11) the panel is a named landmark. The host renders no <main>, so axe reported
+	// every node in this panel as "region: content not contained by landmarks"
+	// (27 nodes measured). Declaring the panel a labelled region cleared our elements
+	// (27 ->6; the6 left are the host sidebar). Assert the attribute survives, so a
+	// refactor cannot silently drop it back to an unlabelled div.
+	{
+		const reg = document.querySelector(".dstv_root");
+		const roleOk = reg !== null && reg.getAttribute("role") === "region";
+		const labelOk = reg !== null && (reg.getAttribute("aria-label") || "").trim() !== "";
+		info.landmark = { roleOk, label: reg !== null ? reg.getAttribute("aria-label") : null };
+		if (!roleOk) fail("the panel root is not role=region (axe region violation returns)");
+		if (!labelOk) fail("the panel region has no accessible name");
+	}
+
 	return JSON.stringify({ failures, info });
 })()

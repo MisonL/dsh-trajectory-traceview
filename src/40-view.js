@@ -1219,6 +1219,12 @@
 					// layout from jumping when the real cards arrive.
 					return jsxs("div", {
 						className: "dstv_root",
+						// The host renders no <main>, so axe flagged every node in this panel
+						// under "region: content not contained by landmarks" (27 nodes). Declaring
+						// the panel a labelled landmark cleared our elements (measured27 ->6; the
+						//6 left belong to the host sidebar) and gives a jump target.
+						role: "region",
+						"aria-label": t("view.label"),
 						tabIndex: 0,
 						children: [header, jsxs("div", {
 							className: "dstv_empty dstv_loading",
@@ -1247,6 +1253,12 @@
 				const incompatible = structureBroken || everythingUnknown;
 				return jsxs("div", {
 					className: "dstv_root",
+					// The host renders no <main>, so axe flagged every node in this panel
+					// under "region: content not contained by landmarks" (27 nodes). Declaring
+					// the panel a labelled landmark cleared our elements (measured27 ->6; the
+					//6 left belong to the host sidebar) and gives a jump target.
+					role: "region",
+					"aria-label": t("view.label"),
 					tabIndex: 0,
 					children: [header, jsxs("div", {
 						className: "dstv_empty",
@@ -2094,6 +2106,12 @@
 
 			return jsxs("div", {
 				className: "dstv_root",
+				// The host renders no <main>, so axe flagged every node in this panel
+				// under "region: content not contained by landmarks" (27 nodes). Declaring
+				// the panel a labelled landmark cleared our elements (measured27 ->6; the
+				//6 left belong to the host sidebar) and gives a jump target.
+				role: "region",
+				"aria-label": t("view.label"),
 				tabIndex: 0,
 				onKeyDown,
 				// Opt into the host's overlapping composer layout. The host detects this
