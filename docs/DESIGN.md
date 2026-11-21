@@ -6130,3 +6130,53 @@ build / provenance 一致 · smoke 通过 · browser-check PASS（12 项）
 KPI 里 18.6M / 21k tokens 说明 #8 的 usage 汇总在真实数据上确实产生了非零值——这条修复在真机上看得见。
 
 **注意**：本次导出内容的 `hasCutMarker = false`。这是符合预期的——那一步没有超过 160 字符的子调用结果，所以不该出现截断标记。截断标记的正确性由 `AUDIT1` 守卫（500 字符夹具）证明，不是在这次真机抽样里证明的。
+
+### 13.17 自查 §13.15 的修复边界（15 组用例，全过）（2026-11-21）
+
+等 Codex 评审时我自己先按它的三个追问方向做了边界自查。全过，但过程值得记：
+
+#### orphan id / displayCallId
+
+| 输入 | 结果 |
+|---|---|
+| `seq` 是 Symbol | `["otx0","otx1"]` 唯一且是字符串 |
+| `seq` 是 NaN | `["otx0","otx1"]` 唯一 |
+| `seq` 重复数字 | `["ot50","ot51"]` 唯一 |
+| `callId` 是 Symbol / BigInt / number / boolean / function / object | `"Symbol(s)" / "5" / "123" / "true" / "[function]" / "[object]"`，都不抛 |
+
+`typeof NaN === "number"`，所以原表达式会走进 `String(NaN)`；靠 ordinal 后缀仍然唯一——这是**巧合**而不是设计，记在这里：如果哪天去掉 ordinal，NaN seq 会立刻撞 id。
+
+#### sub-call 截断标记
+
+| 情形 | 标记 |
+|---|---|
+| 恰好 160 字符、单行 | **无**（正确：没被截断就不该报截断） |
+| 161 字符、单行 | 有 |
+| 多行（首行 50 字符） | 有（正确：只导出了第一行） |
+
+#### partial 去重（改为按内容后是否过头）
+
+| 情形 | 结果 |
+|---|---|
+| partial 重复 durable 的 `"A"` | `["A"]` —— 没重复 |
+| durable `"A"` + partial `"B"` | `["A","B"]` —— 新内容保留 |
+| partial 两段都是 `"X"` | `["X"]` —— 相同文本只留一次 |
+| partial 重复 reasoning | 只留一份 |
+
+#### KPI usage（不双计、不漏计）
+
+| 场景 | tokensIn / tokensOut |
+|---|---|
+| 只有 node usage | 10 / 7（修复前是 0/0） |
+| 只有 request usage | 20 / 3 |
+| 两者都有且**不同** | **20 / 3**（request 优先，与详情面板一致，不累加） |
+| 两者都无 | 0 / 0 |
+
+#### compaction request 计数
+
+| 场景 | unplaced |
+|---|---|
+| 1 请求 + 1 marker（replacementSeq 匹配） | 0 |
+| 2 请求 + 1 marker（同 seq） | **1**（另一条确实没落地） |
+| 0 请求 + 1 marker | 0 |
+| 1 请求 + 0 marker | 1 |
