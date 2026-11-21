@@ -6314,4 +6314,20 @@ EXPORTLEAK1 a string id collided with a non-string ordinal: ["string-id"]
 
 真正的隔离不能用拼接字符串，而要用**嵌套 Map**：外层按 turn，内层直接以原始 `callId` 为键（Map 的 SameValueZero 天然区分 `"~1"` 与任何 Symbol）。这样两个命名空间在类型层面就不存在，而不是靠"前缀不太可能出现"。
 
-这条等 Codex 收尾复核回来后一起修，避免再触发共享工作区冲突。
+Codex 收尾复核**独立复现了同一条**（P2，结论"未收敛"），于是用嵌套 Map 修掉：
+
+```js
+// 外层 turn → 内层 Map(原始 callId → 计数)
+const callsInTurn = (turn) => { ... };
+const claimCall = (turn, callId) => { ... };
+```
+
+`callKey` 这个函数**整个删掉了**——不再有任何编码可撞。字符串 id `~1`、`#1`、`1:2`、`1:#1`、`1:~1` 与任意 Symbol 共存全部验证通过。
+
+`EXPORTLEAK1` 的混合用例扩展为遍历这 5 种"像编码的字符串"，忠实回滚旧编码后翻红：
+
+```
+EXPORTLEAK1 the string id "~1" collided with a non-string ordinal: ["string-id"]
+```
+
+（第一次变异没红，原因是我把序号写成 `flatCalls.size + 1`，每次调用都变——那是**不忠实的变异**，不能算证据。重写成"字符串原样 + 每身份稳定序号"才干净翻红。）
