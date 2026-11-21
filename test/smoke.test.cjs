@@ -2090,6 +2090,15 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			if (runCells.join(",") !== "alpha,beta") {
 				throw new Error("EXPORTLEAK1 distinct Symbol running calls collapsed: " + JSON.stringify(runCells));
 			}
+			// A REAL string id "#1" must not collide with the ordinal given to the first
+			// non-string id (both used to build `1:#1`, losing one of the two calls).
+			const mixedCells = foldOne({ kind: "assistant", step: 1, messageId: "m", blocks: [{ kind: "text", text: "a" }] }, [
+				{ callId: "#1", turn: 1, step: 1, name: "string-id", argsRaw: "{}", time: 1e12 },
+				{ callId: Symbol("x"), turn: 1, step: 1, name: "sym-id", argsRaw: "{}", time: 1e12 }
+			]).stations.filter((x) => x.kind === "step").flatMap((x) => x.cells ?? []).filter((c) => c.kind === "tool").map((c) => c.name);
+			if (mixedCells.join(",") !== "string-id,sym-id") {
+				throw new Error("EXPORTLEAK1 a string id collided with a non-string ordinal: " + JSON.stringify(mixedCells));
+			}
 			for (const [label, node] of cases) {
 				try {
 					foldOne(node);

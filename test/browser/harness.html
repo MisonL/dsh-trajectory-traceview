@@ -36107,7 +36107,10 @@ window.__ModuleLoader__.load({
 				if (typeof callId === "string") return `${String(turn)}:${callId}`;
 				let ord = callOrdinals.get(callId);
 				if (ord === void 0) { ord = callOrdinals.size + 1; callOrdinals.set(callId, ord); }
-				return `${String(turn)}:#${String(ord)}`;
+				// The "~" prefix matters: without it a REAL string id "#1" and the ordinal
+				// for the first non-string id both produced `1:#1`, so a mixed pair lost one
+				// of the two running calls (measured: ["string-id"] instead of both).
+				return `${String(turn)}:~${String(ord)}`;
 			};
 			/**
 			 * Cell ids double as React keys, and `callId` comes straight from the log. A
@@ -36135,7 +36138,9 @@ window.__ModuleLoader__.load({
 			// A merged/retried log can carry MORE THAN ONE request for the same turn:step.
 			// A plain `Map.set` kept only the last, silently losing status/usage/prompt from
 			// the earlier one. Keep every request per key in log order; a station consumes the
-			// earliest unclaimed one, and leftovers are counted as unplaced, never discarded.
+			// LATEST one (so a step retried after a failure still shows its final status), and
+			// leftovers stay in the bucket. They are counted as unplaced ONLY when the key
+			// matched no station at all — a leftover on a matched key is a retry, not a miss.
 			const requestsByStep = new Map();
 			// Keys that actually FOUND a station. A leftover in such a bucket is an earlier
 			// attempt at a step that exists (a retry); a leftover in an unmatched bucket is a
