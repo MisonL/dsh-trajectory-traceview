@@ -196,7 +196,15 @@ Open any session with an AI execution trace → a "Trace View" tab appears next 
 
 ## 11. Development & build
 
-Plain JS, no build step. `lib/index.js` (host half) is a no-op stub; `lib/client.js` is a classic script (`window.__ModuleLoader__.load`) served directly by the client module system.
+Plain JS, and nothing is bundled at runtime — but **`lib/client.js` is a generated file**. Edit `src/*.js` and rebuild; never hand-edit `lib/client.js`:
+
+```powershell
+node scripts/build-client.mjs
+node scripts/build-client.mjs --check
+node scripts/provenance.mjs
+```
+
+Editing `src/` without rebuilding makes `--check` fail and the smoke suite report `BUILD1`. `lib/index.js` (host half) is a no-op stub; `lib/client.js` is a classic script (`window.__ModuleLoader__.load`) served directly by the client module system.
 
 ```powershell
 node test/smoke.test.cjs

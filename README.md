@@ -199,7 +199,15 @@ dsh plugin --profile web add "G:\path\to\dsh-trajectory-traceview"
 
 ## 11. 开发与自测
 
-纯 JS 无构建步骤。`lib/index.js`（宿主半部）是无操作桩；`lib/client.js` 是经典脚本（`window.__ModuleLoader__.load`），由客户端模块系统直接服务。
+纯 JS，运行时不需构建（无打包器、无产物格式转换）。但 **`lib/client.js`是生成物**，必须由 `src/*.js`构建出来，不要手改：
+
+```powershell
+node scripts/build-client.mjs
+node scripts/build-client.mjs --check
+node scripts/provenance.mjs
+```
+
+改了 `src/`却忘了重建时，`--check`会失败，`test/smoke.test.cjs`也会报 `BUILD1`。`lib/index.js`（宿主半部）是无操作桩；`lib/client.js`是经典脚本（`window.__ModuleLoader__.load`），由客户端模块系统直接服务。
 
 ```powershell
 node test/smoke.test.cjs
