@@ -6180,3 +6180,35 @@ KPI 里 18.6M / 21k tokens 说明 #8 的 usage 汇总在真实数据上确实产
 | 2 请求 + 1 marker（同 seq） | **1**（另一条确实没落地） |
 | 0 请求 + 1 marker | 0 |
 | 1 请求 + 0 marker | 1 |
+
+### 13.18 自查又抓到 §13.15 #10 引入的重复显示（2026-11-21）
+
+§13.15 我把"非字符串 callId 的 tool-result 进 orphan"当作修复。自查发现它**制造了重复**：
+
+```
+工具调用 callId = Symbol("dup")，结果 callId 同一个 Symbol
+修复后：
+  tool cells:      [{"name":"bash","running":false,"result":""}]   ← 空结果的工具卡
+  orphan stations: [{"name":"bash","result":"OUT"}]                ← 同一份输出
+```
+
+同一个结果出现两次，其中一次看起来像"没有输出"。
+
+根因不在 orphan 那条，而在**结果索引只收字符串 callId**（`typeof n.callId === "string"` 才 `resultsById.set`）。于是 Symbol 结果永远无法被 `takeResult` 认领 → 既留在 orphan 池里，又让对应的 call 拿不到结果。
+
+修法：**Map 本来就支持任意键**，去掉 `typeof === "string"` 限制，直接以原值为键；`runningById` 同理。修后：
+
+```
+tool cells:      [{"name":"bash","running":false,"result":"OUT"}]
+orphan stations: []
+```
+
+新守卫 `AUDIT1 (6b)` 钉住"非字符串 callId 必须与自己的结果配对，且不得同时出现在 orphan"。变异回旧写法：
+
+```
+AUDIT1 a Symbol callId did not pair with its result: [""]
+```
+
+#### 教训
+
+**修"数据丢失"容易造成"数据重复"。** §13.11 是同类问题的另一次（改成了错误的一条优先）。两次都是：改动的方向对，但只盯着"别丢"，没检查"会不会多"。

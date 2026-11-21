@@ -4484,6 +4484,23 @@ if (!liveStep.cells.some((c) => c.kind === "assistant" && c.text.includes("æ­£åœ
 			if (typeof trN.stations[0].id !== "string") throw new Error("AUDIT1 the orphan id is not a string");
 		}
 
+		// (6b) a non-string callId must PAIR with its own tool-call. Indexing only string
+		// ids left the result unclaimable: the call rendered with an empty result and the
+		// same output ALSO appeared as an orphan station, i.e. twice, one copy looking empty.
+		{
+			const pairId = Symbol("pair");
+			const trPair = foldAudit({ eventNodes: [
+				{ kind: "assistant", seq: 1, time: 1e12, turn: 1, step: 1, messageId: "m", blocks: [{ kind: "tool-call", callId: pairId, name: "bash", argsRaw: "{}" }] },
+				{ kind: "tool-result", seq: 2, time: 1e12, turn: 1, step: 1, callId: pairId, name: "bash", call: null, content: [{ type: "text", text: "OUT" }], subCalls: [] }
+			] });
+			const cells = trPair.stations.filter((x) => x.kind === "step").flatMap((x) => x.cells ?? []).filter((c) => c.kind === "tool");
+			const orphansPair = trPair.stations.filter((x) => x.kind === "orphan-tool");
+			if (cells.length !== 1 || cells[0].resultText !== "OUT") {
+				throw new Error("AUDIT1 a Symbol callId did not pair with its result: " + JSON.stringify(cells.map((c) => c.resultText)));
+			}
+			if (orphansPair.length !== 0) throw new Error("AUDIT1 a paired result was ALSO shown as an orphan (" + orphansPair.length + ")");
+		}
+
 		// (7) duplicate orphan callIds must not collide into one React key.
 		{
 			const trS = foldAudit({ eventNodes: [

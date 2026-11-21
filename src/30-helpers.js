@@ -994,7 +994,11 @@
 			// seq, and let each call claim the next unconsumed one.
 			const resultsById = new Map();
 			for (const n of nodes) {
-				if (n.kind !== "tool-result" || typeof n.callId !== "string") continue;
+				// Index EVERY callId, not just strings. A Map keys on any value, and skipping
+				// non-strings meant a Symbol/BigInt id could never be claimed: the call showed
+				// an empty result AND the very same result also surfaced as an orphan — the
+				// same output twice, one of the copies looking like "no output".
+				if (n.kind !== "tool-result") continue;
 				const list = resultsById.get(n.callId);
 				if (list === void 0) resultsById.set(n.callId, [n]);
 				else list.push(n);
@@ -1004,7 +1008,8 @@
 			// second call with the same id must take a DIFFERENT result.
 			const consumedResults = new Set();
 			const runningById = new Map();
-			for (const c of safeList(snap?.runningCalls)) if (typeof c.callId === "string") runningById.set(c.callId, c);
+			// Same reason as `resultsById`: key on the raw value so a non-string id still pairs.
+			for (const c of safeList(snap?.runningCalls)) if (c !== null && typeof c === "object") runningById.set(c.callId, c);
 			const schemasById = snap?.callSchemas instanceof Map ? snap.callSchemas : new Map();
 			// Keyed by `${turn}:${callId}`, NOT by callId alone.
 			//
